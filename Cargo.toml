@@ -31,6 +31,7 @@ authors = ["Project Hyperion Contributors"]
 # Must match LICENSE and the per-file SPDX headers.
 license = "PolyForm-Shield-1.0.0"
 repository = "https://github.com/hyperion-lsp/hyperion-lsp"
+homepage = "https://github.com/hyperion-lsp/hyperion-lsp"
 
 [workspace.lints.clippy]
 pedantic = { level = "deny", priority = -1 }
@@ -207,3 +208,9 @@ split-debuginfo = "unpacked"
 [profile.test]
 debug = "line-tables-only"
 split-debuginfo = "unpacked"
+
+# Profile used by `dist` for release archives. No LTO: it multiplies link time
+# and memory on the smaller hosted macOS runners for little gain here.
+[profile.dist]
+inherits = "release"
+strip = true

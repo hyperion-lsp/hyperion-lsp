@@ -42,3 +42,10 @@ threads-required = 'num-test-threads'
 [[profile.default.overrides]]
 filter = 'test(/corpus[^:]*$/) | test(/fuzz[^:]*$/) | test(/stress[^:]*$/) | test(/mass_parse[^:]*$/) | test(/differential[^:]*$/) | test(/jvm[^:]*$/) | test(/autogen_navigation[^:]*$/)'
 threads-required = 'num-test-threads'
+
+# Wall-clock performance assertions (e.g. "1000 lookups average under 1 us")
+# measure the machine as much as the code: beside other tests they fail on
+# contention alone (8 us observed on a 4-vCPU CI runner). Run them alone.
+[[profile.default.overrides]]
+filter = 'binary(performance_regression_test)'
+threads-required = 'num-test-threads'

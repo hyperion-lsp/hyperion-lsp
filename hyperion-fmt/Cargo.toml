@@ -45,3 +45,6 @@ tempfile.workspace = true
 
 # Golden testing (diff-based)
 similar = "2.4"
+
+[package.metadata.dist]
+dist = false

@@ -8,5 +8,6 @@
   and an optional build-tool classpath query.
 - JVM launch descriptions and a DAP/JDWP debugger for Java and Kotlin.
 - Java formatting, refactoring support, and experimental security diagnostics.
-- Source-build instructions, a VS Code extension and a Neovim plugin; no
-  packaged distribution.
+- Prebuilt binaries for Linux and macOS (GitHub Releases, shell installer,
+  Homebrew tap), source-build instructions, a VS Code extension and a Neovim
+  plugin.

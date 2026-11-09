@@ -7,6 +7,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
 
 [lints]
 workspace = true
@@ -110,3 +111,6 @@ harness = false
 [[bin]]
 name = "hyperion-lsp"
 path = "src/main.rs"
+
+[package.metadata.dist]
+dist = true
