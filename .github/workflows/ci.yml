@@ -99,7 +99,7 @@ jobs:
           tool: nextest@0.9.151
       - uses: Swatinem/rust-cache@v2
         with:
-          key: test-${{ matrix.name }}
+          key: test-${{ strategy.job-index }}
       # Default nextest profile (.config/nextest.toml): test-threads = 4 and the
       # #[ignore]d heavy tests are skipped; they belong to `--profile heavy`.
       - name: cargo nextest run
