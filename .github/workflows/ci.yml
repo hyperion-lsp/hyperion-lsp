@@ -1,0 +1,162 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_NET_RETRY: "10"
+  RUST_BACKTRACE: "1"
+  # Pinned so that new clippy lints on a newer stable cannot turn CI red
+  # without a code change. Bump together with the README's tested version.
+  RUST_VERSION: "1.99.1"
+  JAVA_VERSION: "21"
+
+jobs:
+  rustfmt:
+    name: rustfmt
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust
+        run: rustup toolchain install "$RUST_VERSION" --profile minimal --component rustfmt --no-self-update && rustup default "$RUST_VERSION"
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust
+        run: rustup toolchain install "$RUST_VERSION" --profile minimal --component clippy --no-self-update && rustup default "$RUST_VERSION"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: clippy
+      # Same flags as scripts/verify.sh (per package, all targets, no deps).
+      # The workspace excludes the vendored tower-lsp fork, so --workspace
+      # lints first-party crates only.
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --locked -j 4 --no-deps -- -D warnings
+
+  test:
+    name: test (${{ matrix.name }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # hyperion-lsp is by far the largest suite; hash-partition it.
+          - name: lsp 1/6
+            packages: -p hyperion-lsp
+            partition: hash:1/6
+          - name: lsp 2/6
+            packages: -p hyperion-lsp
+            partition: hash:2/6
+          - name: lsp 3/6
+            packages: -p hyperion-lsp
+            partition: hash:3/6
+          - name: lsp 4/6
+            packages: -p hyperion-lsp
+            partition: hash:4/6
+          - name: lsp 5/6
+            packages: -p hyperion-lsp
+            partition: hash:5/6
+          - name: lsp 6/6
+            packages: -p hyperion-lsp
+            partition: hash:6/6
+          - name: syntax
+            packages: -p hyperion-parser -p hyperion-types -p hyperion-kotlin -p hyperion-groovy -p hyperion-scala -p hyperion-layout -p hyperion-fmt
+          - name: analysis
+            packages: -p hyperion-semantics -p hyperion-refactor -p hyperion-actions -p hyperion-security
+          - name: build and runtime
+            packages: -p hyperion-build -p hyperion-bytecode -p hyperion-workspace -p hyperion-jdwp -p hyperion-dap -p hyperion-eval
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust
+        run: rustup toolchain install "$RUST_VERSION" --profile minimal --no-self-update && rustup default "$RUST_VERSION"
+      # Some tests exercise a real JVM and read JDK modules.
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest@0.9.151
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: test-${{ strategy.job-index }}
+      # Default nextest profile (.config/nextest.toml): test-threads = 4 and the
+      # #[ignore]d heavy tests are skipped; they belong to `--profile heavy`.
+      - name: cargo nextest run
+        env:
+          PARTITION: ${{ matrix.partition }}
+        run: |
+          args=()
+          if [ -n "$PARTITION" ]; then args+=(--partition "$PARTITION"); fi
+          # nice keeps the runner service responsive: with the tests at normal
+          # priority, a CPU-saturated 4-vCPU runner can miss its heartbeat and
+          # be reported as "received a shutdown signal".
+          nice -n 10 cargo nextest run ${{ matrix.packages }} --locked --no-fail-fast "${args[@]}"
+
+  vscode:
+    name: VS Code extension
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: editors/vscode
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npm run compile
+      - run: npm test
+
+  repo-checks:
+    name: repository checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      # scripts/check-test-bodies.sh needs ripgrep.
+      - run: sudo apt-get install -y --no-install-recommends ripgrep
+      - run: bash scripts/check-headers.sh --all
+      - run: bash scripts/check-test-bodies.sh
+      - run: bash scripts/check-build-test-relevance.sh
+
+  third-party-licenses:
+    name: third-party licenses
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust
+        run: rustup toolchain install "$RUST_VERSION" --profile minimal --no-self-update && rustup default "$RUST_VERSION"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about@0.9.3
+      # Fails if a dependency uses a license that about.toml does not accept,
+      # so the release build cannot be the first place that notices.
+      - name: Generate THIRD_PARTY_LICENSES
+        run: >
+          cargo about generate --locked --manifest-path hyperion-lsp/Cargo.toml
+          -c about.toml packaging/third-party-licenses.hbs -o THIRD_PARTY_LICENSES
