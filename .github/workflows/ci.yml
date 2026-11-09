@@ -125,6 +125,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
+      # scripts/check-test-bodies.sh needs ripgrep.
+      - run: sudo apt-get install -y --no-install-recommends ripgrep
       - run: bash scripts/check-headers.sh --all
       - run: bash scripts/check-test-bodies.sh
       - run: bash scripts/check-build-test-relevance.sh
