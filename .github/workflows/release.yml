@@ -129,8 +129,13 @@ jobs:
           fi
       - name: "Install cargo-about"
         uses: "taiki-e/install-action@v2"
+        if: "${{ !(runner.os == 'macOS' && runner.arch == 'X64') }}"
         with:
           "tool": "cargo-about@0.9.3"
+      - name: "Install cargo-about from source"
+        if: "${{ runner.os == 'macOS' && runner.arch == 'X64' }}"
+        run: "cargo install --locked --version 0.9.3 --features cli cargo-about"
+        shell: "bash"
       - name: "Generate THIRD_PARTY_LICENSES"
         run: |
           cargo about generate --locked --manifest-path hyperion-lsp/Cargo.toml \

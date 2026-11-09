@@ -4,9 +4,15 @@
 # The release archives must carry the license notices of every third-party
 # crate compiled into the binary, including the MPL-2.0 source locations.
 - name: Install cargo-about
+  if: ${{ !(runner.os == 'macOS' && runner.arch == 'X64') }}
   uses: taiki-e/install-action@v2
   with:
     tool: cargo-about@0.9.3
+# cargo-about publishes no prebuilt Intel macOS binary.
+- name: Install cargo-about from source
+  if: ${{ runner.os == 'macOS' && runner.arch == 'X64' }}
+  shell: bash
+  run: cargo install --locked --version 0.9.3 --features cli cargo-about
 - name: Generate THIRD_PARTY_LICENSES
   shell: bash
   run: |
