@@ -1,0 +1,241 @@
+*hyperion.txt*  Neovim client for the Hyperion JVM language server
+
+Requires Neovim 0.11 or newer. Optional: nvim-dap.
+
+==============================================================================
+CONTENTS                                                    *hyperion-contents*
+
+  1. Introduction ......................... |hyperion|
+  2. Install .............................. |hyperion-install|
+  3. Setup and options .................... |hyperion-setup|
+  4. Commands ............................. |hyperion-commands|
+  5. Debugging with nvim-dap .............. |hyperion-dap|
+  6. Health check ......................... |hyperion-health|
+  7. Troubleshooting ...................... |hyperion-troubleshooting|
+  8. License .............................. |hyperion-license|
+
+==============================================================================
+1. INTRODUCTION                                                     *hyperion*
+
+hyperion.nvim is a thin client for Hyperion, a language server for Java,
+Kotlin and Groovy written in Rust (github.com/hyperion-lsp/hyperion-lsp).
+It provides:
+
+  - an `lsp/hyperion.lua` config for |vim.lsp.enable()|
+  - the |:Hyperion| command
+  - an optional nvim-dap adapter and configurations (|hyperion-dap|)
+  - |:checkhealth| hyperion
+
+The plugin does not include the server. Build `hyperion-lsp` from source and
+put it on $PATH, or set `server_path` (|hyperion-options|).
+
+==============================================================================
+2. INSTALL                                                  *hyperion-install*
+
+lazy.nvim: >lua
+    { 'hyperion-lsp/hyperion.nvim', opts = {} }
+<
+`opts = {}` makes lazy.nvim call |hyperion.setup()|. Do not lazy-load by
+filetype: the plugin must be on 'runtimepath' before the first buffer
+attaches.
+
+vim.pack: >lua
+    vim.pack.add({ 'https://github.com/hyperion-lsp/hyperion.nvim' })
+    vim.lsp.enable('hyperion')
+<
+Native package: clone the repository into
+`~/.local/share/nvim/site/pack/hyperion/start/hyperion.nvim`, or append
+`editors/nvim` of a Hyperion checkout to 'runtimepath', then call
+`vim.lsp.enable('hyperion')` or |hyperion.setup()|.
+
+Without the plugin, the server needs only: >lua
+    vim.lsp.config('hyperion', {
+      cmd = { '/path/to/hyperion-lsp' },
+      filetypes = { 'java', 'kotlin', 'groovy' },
+      root_markers = {
+        { 'settings.gradle', 'settings.gradle.kts' },
+        '.git',
+        { 'pom.xml', 'build.gradle', 'build.gradle.kts' },
+      },
+    })
+    vim.lsp.enable('hyperion')
+<
+==============================================================================
+3. SETUP AND OPTIONS                                          *hyperion-setup*
+
+                                                             *hyperion.setup()*
+require('hyperion').setup([{opts}])
+    Apply options and, unless `auto_enable` is false, enable the server. It is
+    optional: `vim.lsp.enable('hyperion')` alone is enough. If `hyperion-lsp`
+    cannot be found, a warning is shown and the server is not enabled.
+
+                                                            *hyperion-options*
+Defaults: >lua
+    require('hyperion').setup({
+      server_path = nil,
+      auto_enable = true,
+      extra_filetypes = {},
+      init_options = nil,
+      settings = nil,
+      build_tool_classpath = nil,
+      codelens = true,
+      dap = true,
+    })
+<
+`server_path` (string)
+    Path to `hyperion-lsp`. `~` is expanded. When nil, $PATH is searched.
+
+`auto_enable` (boolean)
+    Call |vim.lsp.enable()| for `hyperion`.
+
+`extra_filetypes` (string[])
+    Added to `java`, `kotlin` and `groovy`. Scala support is thin (hover and
+    go-to-definition by name), so it is opt-in: `{ 'scala' }`.
+
+`init_options`, `settings` (table)
+    Sent as LSP `initializationOptions` and as
+    `workspace/didChangeConfiguration` settings.
+
+`build_tool_classpath` (boolean)
+    When true, Hyperion runs `./gradlew` or `mvn` to resolve exact classpaths.
+    This executes the project's build scripts and plugins, that is, arbitrary
+    code from the repository. Enable it only for projects you trust. It is
+    sent as `{ hyperion = { buildToolClasspath = true } }` in both
+    `init_options` and `settings`.
+
+`codelens` (boolean)
+    Enable code lens display and refresh in attached buffers. Hyperion
+    provides a "Run" lens above Java `main` methods.
+
+`dap` (boolean)
+    Register the nvim-dap adapter and configurations when nvim-dap is
+    installed.
+
+Everything else is plain |vim.lsp.config()|: >lua
+    vim.lsp.config('hyperion', { cmd_env = { HYPERION_DEBUG = '1' } })
+<
+The root is the nearest ancestor with `settings.gradle(.kts)`, else with
+`.git`, else with `pom.xml` or `build.gradle(.kts)`.
+
+==============================================================================
+4. COMMANDS                                                *hyperion-commands*
+
+                                                                   *:Hyperion*
+:Hyperion {subcommand}
+    Subcommands complete with <Tab>. Without an attached server they print a
+    message and do nothing.
+
+:Hyperion reload
+    Re-read the Gradle/Maven model (`hyperion.reloadProject`).
+
+:Hyperion run [{name}]
+    Pick an application run configuration from `.run/*.xml` or
+    `.idea/runConfigurations` (`hyperion.runConfigurations`), then run its
+    main class in the server's bytecode VM (`hyperion.run`). The source file
+    is located through the workspace symbol index. Output:
+    |:Hyperion-output|.
+
+:Hyperion debug
+:Hyperion launch
+    Resolve (`hyperion.resolveLaunch`), build and debug the `main` method
+    under the cursor with nvim-dap. See |hyperion-dap|.
+
+:Hyperion codelens
+    Run the code lens on the cursor line, usually the "Run" lens above `main`.
+    Bind it yourself: >lua
+    vim.keymap.set('n', '<leader>cr', '<Cmd>Hyperion codelens<CR>')
+<
+                                                            *:Hyperion-output*
+:Hyperion output
+    Open the server's `window/logMessage` output in a split. Neovim's LSP log
+    drops messages below WARN, so the stdout and stderr of a run are kept
+    here.
+
+:Hyperion log
+    Open Neovim's LSP log (|vim.lsp.log.get_filename()|).
+
+:Hyperion info
+    Show the server binary and version, whether the config is enabled, the
+    client attached to the buffer with its root, and nvim-dap status.
+
+Commands the server accepts from older clients but no longer advertises are
+handled in the client: `hyperion.showImplementations` calls
+|vim.lsp.buf.implementation()|; `hyperion.runTest` reports that running tests
+is unsupported (Hyperion has no test runner).
+
+==============================================================================
+5. DEBUGGING WITH NVIM-DAP                                         *hyperion-dap*
+
+When nvim-dap is installed, the plugin registers, on the first attach, the
+adapter `dap.adapters.hyperion` (it runs `hyperion-lsp dap`) and two
+configurations for `java` and `kotlin`:
+
+  launch the main method in this file ~
+    Resolves the `main` method under the cursor, runs the build step the
+    server returns (javac, Gradle or Maven; on failure the session does not
+    start and the build output is shown) and launches the program with the
+    resolved classpath. A configuration with `mainClass` set is not resolved.
+
+  attach to a JVM (JDWP) ~
+    Prompts for a port (default 5005) and attaches to 127.0.0.1.
+
+Example of a hand-written configuration: >lua
+    require('dap').configurations.java = {
+      {
+        type = 'hyperion',
+        request = 'launch',
+        name = 'Main with arguments',
+        mainClass = 'com.example.Main',
+        classpath = vim.fn.getcwd() .. '/build/classes/java/main',
+        args = { '--verbose' },
+        jvmArgs = { '-Xmx512m' },
+        cwd = vim.fn.getcwd(),
+        projectRoot = vim.fn.getcwd(),
+        env = { FOO = 'bar' },
+      },
+    }
+<
+Only `main` methods are launched; debugging tests is not supported. An adapter
+or configuration you define yourself is never replaced. `dap = false` disables
+the registration.
+
+==============================================================================
+6. HEALTH CHECK                                                *hyperion-health*
+
+`:checkhealth hyperion` reports the Neovim version, the server binary and its
+`--version` output, a JDK on $PATH or $JAVA_HOME, nvim-dap, whether the config
+is enabled and the running clients.
+
+==============================================================================
+7. TROUBLESHOOTING                                     *hyperion-troubleshooting*
+
+No client attaches ~
+    Run `:checkhealth hyperion`. The binary must be on $PATH or in
+    `server_path`, and 'filetype' must be `java`, `kotlin` or `groovy`.
+    Neovim only logs (|vim.lsp.log|) when an `lsp/` config's command is not
+    executable.
+
+Several servers for one project ~
+    Check the root with `:Hyperion info`. Adjust `root_markers` or `root_dir`
+    through |vim.lsp.config()|.
+
+Unresolved library symbols ~
+    Build the project once so dependency caches exist, or see
+    `build_tool_classpath` in |hyperion-options|.
+
+The Run lens shows only a message ~
+    The program output is in |:Hyperion-output|. Code lenses exist for Java,
+    not Kotlin.
+
+Logs ~
+    `:Hyperion log` opens Neovim's log; `vim.lsp.log.set_level('debug')` adds
+    traffic. The server writes `$TMPDIR/hyperion-lsp-<pid>.log`; set
+    `HYPERION_DEBUG=1` for more detail.
+
+==============================================================================
+8. LICENSE                                                    *hyperion-license*
+
+PolyForm Shield License 1.0.0: free for any use except building a competing
+product. See the LICENSE file.
+
+ vim:tw=78:ts=8:ft=help:norl:
