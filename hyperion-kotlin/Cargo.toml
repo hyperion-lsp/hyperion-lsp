@@ -43,3 +43,6 @@ hyperion-types.workspace = true
 criterion.workspace = true
 proptest.workspace = true
 walkdir = "2.5"
+
+[package.metadata.dist]
+dist = false
