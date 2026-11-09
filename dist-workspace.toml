@@ -20,6 +20,7 @@ targets = [
     "aarch64-unknown-linux-gnu",
     "x86_64-apple-darwin",
     "x86_64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
 ]
 # Homebrew formula name and tap. The tap repository syncs the formula from the
 # release asset itself, so no cross-repository token is needed.
@@ -34,7 +35,7 @@ install-path = "~/.local/bin"
 # .github/dist-build-setup.yml before each build (see about.toml).
 include = ["NOTICE", "THIRD_PARTY_LICENSES"]
 # Run `dist plan` on pull requests so release configuration errors surface early.
-pr-run-mode = "plan"
+pr-run-mode = "upload"
 # Extra steps run before every build job: generate THIRD_PARTY_LICENSES.
 github-build-setup = "../dist-build-setup.yml"
 
@@ -43,3 +44,4 @@ aarch64-unknown-linux-gnu = "ubuntu-22.04-arm"
 x86_64-unknown-linux-gnu = "ubuntu-22.04"
 aarch64-apple-darwin = "macos-15"
 x86_64-apple-darwin = "macos-15-intel"
+x86_64-pc-windows-msvc = "windows-2022"
