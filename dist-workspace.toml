@@ -20,7 +20,6 @@ targets = [
     "aarch64-unknown-linux-gnu",
     "x86_64-apple-darwin",
     "x86_64-unknown-linux-gnu",
-    "x86_64-pc-windows-msvc",
 ]
 # Homebrew formula name and tap. The tap repository syncs the formula from the
 # release asset itself, so no cross-repository token is needed.
@@ -44,4 +43,3 @@ aarch64-unknown-linux-gnu = "ubuntu-22.04-arm"
 x86_64-unknown-linux-gnu = "ubuntu-22.04"
 aarch64-apple-darwin = "macos-15"
 x86_64-apple-darwin = "macos-15-intel"
-x86_64-pc-windows-msvc = "windows-2022"
