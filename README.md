@@ -8,8 +8,8 @@ own JVM bytecode interpreter — which is how it reads Gradle plugin bytecode,
 and how it runs your `main` method without starting a JVM.
 
 > **Status: development release, v0.1.0.** Java is usable for day-to-day work.
-> Kotlin is behind it and you will notice. There is no packaged distribution
-> and no documented third-party production deployment yet.
+> Kotlin is behind it and you will notice. Prebuilt binaries exist for Linux
+> and macOS, but there is no documented third-party production deployment yet.
 > [What works today](#what-works-today) is deliberately blunt — read it before
 > you install, and read [known rough edges](#known-rough-edges) before you
 > recommend it to anyone else.
@@ -189,12 +189,45 @@ keywords and comments. For real Scala, use
   for a client to spawn, and there is nothing to run a test with when the
   project has no build tool. Legacy `hyperion.runTest` commands from cached
   clients are rejected explicitly.
-- **No packaged distribution.** No Homebrew tap, no Marketplace listing, no
-  crates.io release. Build from source.
+- **Limited distribution.** Prebuilt binaries come from GitHub Releases, a
+  shell installer and a Homebrew tap (see [Install](#install)). There is no
+  VS Code Marketplace listing, no Windows build and no crates.io release.
 
 ---
 
-## Try it
+## Install
+
+Prebuilt `hyperion-lsp` binaries are published on the
+[GitHub Releases](https://github.com/hyperion-lsp/hyperion-lsp/releases) page
+for Linux (x86_64 and aarch64, glibc) and macOS (Apple silicon and Intel). A
+JDK on `PATH` or via `JAVA_HOME` supplies runtime standard-library support
+(the benchmarks use 21); it is not installed for you.
+
+### Homebrew (macOS and Linux)
+
+```bash
+brew install hyperion-lsp/tap/hyperion-lsp
+```
+
+If Homebrew refuses to load the formula because the tap is untrusted, run
+`brew trust hyperion-lsp/tap` and retry.
+
+### Shell installer
+
+Installs the binary for your platform into `~/.local/bin`:
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/hyperion-lsp/hyperion-lsp/releases/latest/download/hyperion-lsp-installer.sh | sh
+```
+
+You can also download an archive from the Releases page yourself. Each archive
+contains the binary, `LICENSE`, `NOTICE` and `THIRD_PARTY_LICENSES` (the
+licenses of the bundled Rust crates, with source locations for the MPL-2.0
+ones); checksums are in `sha256.sum`. The macOS binaries are not code-signed
+or notarized; if Gatekeeper blocks one from a manually downloaded archive,
+clear the quarantine flag with `xattr -d com.apple.quarantine hyperion-lsp`.
+
+### From source
 
 Needs a current stable Rust toolchain (tested with Rust 1.99.1), a C toolchain
 and platform development headers (for example, Linux build-essential or macOS
@@ -205,7 +238,7 @@ about 53 MB unstripped or 41 MB stripped. Size varies by toolchain and target.
 
 ```bash
 git clone https://github.com/hyperion-lsp/hyperion-lsp.git
-cd hyperion-ls
+cd hyperion-lsp
 nice -n 10 cargo build --locked --release -p hyperion-lsp --bin hyperion-lsp -j 4
 ```
 
@@ -223,6 +256,8 @@ hyperion-lsp                    # LSP server over stdio
 hyperion-lsp format Foo.java    # format Java files in place (--check / --list do not write)
 hyperion-lsp dap                # Debug Adapter Protocol server over stdio
 ```
+
+## Editors and usage
 
 ### Neovim
 
@@ -379,6 +414,11 @@ Measured from `hyperion-kotlin/tests/corpus/` (37 original Kotlin files, 2483 li
 nice -n 10 cargo check -p hyperion-lsp --tests -j 4
 nice -n 10 cargo clippy -p hyperion-lsp --all-targets -j 4
 ```
+
+CI (`.github/workflows/ci.yml`) runs `cargo fmt --check`, `cargo clippy -D warnings`,
+the default `cargo nextest` profile (the `#[ignore]`d heavy tests are not run;
+use `--profile heavy` locally) and the VS Code extension build on every pull
+request. Release process: [RELEASING.md](RELEASING.md).
 
 Run checks for the crates you change, one Cargo command at a time. The local
 verification script requires Bash and Python 3.11 or newer.
