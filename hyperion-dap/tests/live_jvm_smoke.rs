@@ -1532,13 +1532,16 @@ async fn kotlin_breakpoints_bind_in_facades_classes_and_lambdas() {
     }
     let dir = std::env::temp_dir().join("hyp_dap_kotlin");
     let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(dir.join("out")).unwrap();
+    std::fs::create_dir_all(&dir).unwrap();
     let source = "package demo\n\nclass Greeter {\n    fun greet(name: String): String {\n        return \"hi $name\"\n    }\n}\n\nfun shout(text: String): String {\n    return text.uppercase()\n}\n\nfun main() {\n    val greeter = Greeter()\n    val words = listOf(\"a\", \"b\")\n    words.forEach { w ->\n        println(greeter.greet(w))\n    }\n    println(shout(\"done\"))\n}\n";
     write_file(&dir, "Demo.kt", source);
+    // The program calls into kotlin-stdlib (`listOf`, `forEach`), and the
+    // launch classpath is only the compiler output, so bundle the runtime.
     let compile = StdCommand::new("kotlinc")
         .arg(dir.join("Demo.kt"))
+        .arg("-include-runtime")
         .arg("-d")
-        .arg(dir.join("out"))
+        .arg(dir.join("out.jar"))
         .output()
         .expect("kotlinc");
     assert!(
@@ -1552,7 +1555,7 @@ async fn kotlin_breakpoints_bind_in_facades_classes_and_lambdas() {
         .request("initialize", json!({ "linesStartAt1": true }))
         .await;
     client.wait_event("initialized").await;
-    let out = dir.join("out").to_string_lossy().to_string();
+    let out = dir.join("out.jar").to_string_lossy().to_string();
     client
         .request(
             "launch",
