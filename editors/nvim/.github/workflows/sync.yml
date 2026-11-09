@@ -1,0 +1,45 @@
+# Keeps this repository in step with editors/nvim in hyperion-lsp/hyperion-lsp.
+# The plugin is developed in that monorepo; this workflow re-runs `git subtree split`
+# there and fast-forwards main here. It only takes effect in hyperion-lsp/hyperion.nvim
+# (GitHub ignores workflows outside a repository's root .github directory).
+#
+# GITHUB_TOKEN cannot push changes to workflow files, so a change to this file must be
+# pushed to hyperion.nvim by hand once:
+#   git subtree split --prefix editors/nvim main
+#   git push git@github.com:hyperion-lsp/hyperion.nvim.git <sha>:refs/heads/main
+name: Sync from monorepo
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+  repository_dispatch:
+    types: [sync]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'hyperion-lsp/hyperion.nvim'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the monorepo
+        uses: actions/checkout@v4
+        with:
+          repository: hyperion-lsp/hyperion-lsp
+          fetch-depth: 0
+          path: monorepo
+
+      - name: Split editors/nvim and push
+        working-directory: monorepo
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          split=$(git subtree split --prefix editors/nvim origin/main)
+          echo "editors/nvim at origin/main splits to ${split}"
+          git push "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "${split}:refs/heads/main"

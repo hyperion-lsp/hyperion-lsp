@@ -205,3 +205,10 @@ Start with `:checkhealth hyperion` and `:Hyperion info`.
 
 [PolyForm Shield 1.0.0](LICENSE): free for any use except building a competing
 product. See the main repository for the exact terms.
+
+## Development
+
+The plugin lives in [`editors/nvim`](https://github.com/hyperion-lsp/hyperion-lsp/tree/main/editors/nvim)
+of the main Hyperion repository; please open issues and pull requests there.
+[hyperion-lsp/hyperion.nvim](https://github.com/hyperion-lsp/hyperion.nvim) is a read-only mirror
+that a scheduled workflow updates from that directory.
