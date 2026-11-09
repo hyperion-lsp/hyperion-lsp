@@ -1,0 +1,3 @@
+# Optional faster linking on Linux when lld is installed:
+# RUSTFLAGS="-C link-arg=-fuse-ld=lld" cargo build -p hyperion-lsp -j 4
+# The default uses the platform toolchain's linker.

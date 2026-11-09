@@ -1,0 +1,39 @@
+[package]
+name = "hyperion-security"
+publish = false
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Type-aware security scanner for JVM languages"
+
+[dependencies]
+hyperion-parser.workspace = true
+hyperion-build.workspace = true
+hyperion-semantics.workspace = true
+hyperion-workspace.workspace = true
+rowan.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+rayon.workspace = true
+walkdir.workspace = true
+lsp-types.workspace = true
+tracing.workspace = true
+bitflags = "2.4"
+sha2 = "0.10"
+toml = "0.8"
+syntect = "5.2"
+atty = "0.2"
+
+[[bin]]
+name = "hyperion-security"
+path = "src/main.rs"
+
+[dev-dependencies]
+tempfile = "3.8"
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

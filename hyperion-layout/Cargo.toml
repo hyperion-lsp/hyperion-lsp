@@ -1,0 +1,15 @@
+[package]
+name = "hyperion-layout"
+publish = false
+description = "Filesystem conventions of JVM builds: module / source-set locator, build inputs, output directories"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile = { workspace = true }

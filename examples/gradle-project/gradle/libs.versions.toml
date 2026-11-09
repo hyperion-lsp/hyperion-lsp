@@ -1,0 +1,48 @@
+[versions]
+zxing = '3.5.2'
+jupiter = '5.12.0'
+
+# Naming convention for libraries:
+# Prefix the library name with a category or descriptive string that reflects *what* the library does or is used for.
+# Example: `monitoring-datadog-agent-client`, `db-pooling-hikari`
+# If the library name is descriptive enough on its own, you can skip the prefix. E.g. `libphonenumber`.
+[libraries]
+dependency-injection-guice = "com.google.inject:guice:6.0.0"
+monitoring-datadog-agent-client = "com.datadoghq:java-dogstatsd-client:4.4.2"
+monitoring-datadog-apm-client = { module = "com.datadoghq:dd-trace-api", version = "1.43.0" }
+monitoring-newrelic-agent-client = "com.newrelic.agent.java:newrelic-api:3.33.0"
+monitoring-opentracing = { module = "io.opentracing:opentracing-util", version = "0.33.0" }
+monitoring-sentry-client = "io.sentry:sentry:8.5.0"
+monitoring-sentry-client-logback = "io.sentry:sentry-logback:8.5.0"
+time-joda-time = "joda-time:joda-time:2.10.1"
+redis-client-jedis = "redis.clients:jedis:5.1.5"
+redis-client-redisson = "org.redisson:redisson:3.34.1"
+db-pooling-hikari = "com.zaxxer:HikariCP:6.2.1"
+db-driver-postgres = "org.postgresql:postgresql:42.7.5"
+db-jdbc-wrapper-aws = "software.amazon.jdbc:aws-advanced-jdbc-wrapper:2.5.1"
+slf4j-api = { module = "org.slf4j:slf4j-api", version = "1.7.10" }
+logback-classic = { module = "ch.qos.logback:logback-classic", version = "1.2.10" }
+logstash-logback-encoder = { module = "net.logstash.logback:logstash-logback-encoder", version = "7.2" }
+utils-commons-lang3 = { module = "org.apache.commons:commons-lang3", version = "3.18.0" }
+utils-commons-pooling = 'org.apache.commons:commons-pool2:2.12.1'
+libphonenumber = { module = "com.googlecode.libphonenumber:libphonenumber", version = "8.12.57" }
+barcode-zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
+barcode-zxing-javase = { module = "com.google.zxing:javase", version.ref = "zxing" }
+cache-caffeine = { module = "com.github.ben-manes.caffeine:caffeine", version = "3.1.8" }
+assertion-async-awaitility = "org.awaitility:awaitility:4.2.2"
+testing-junit4 = 'junit:junit:4.13.1'
+testing-junit-vintage-engine = { module = "org.junit.vintage:junit-vintage-engine", version.ref = "jupiter" }
+testing-junit-jupiter-engine = { module = "org.junit.jupiter:junit-jupiter-engine", version.ref = "jupiter" }
+testing-junit-jupiter-platform-launcher = { module = "org.junit.platform:junit-platform-launcher", version = "1.12.0" }
+testing-junit-jupiter-api = { module = "org.junit.jupiter:junit-jupiter-api", version.ref = "jupiter" }
+testing-junit-jupiter-params = { module = "org.junit.jupiter:junit-jupiter-params", version.ref = "jupiter" }
+
+# READ BEFORE YOU CREATE/MODIFY BUNDLES
+# Bundles are used to group dependencies that are always used together within the same gradle
+# dependency scope (implementation/api/compileOnly etc).
+# Be wary of bundles, as they will pull in all the dependencies declared in them downstream. We should never add extra
+# libraries to a bundle unless they're actually used by all consumers of it.
+[bundles]
+logging = ["slf4j-api", "logback-classic"]
+tracing = ["monitoring-datadog-apm-client", "monitoring-opentracing"]
+barcode-zxing = ["barcode-zxing-core", "barcode-zxing-javase"]

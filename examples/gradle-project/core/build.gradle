@@ -1,0 +1,68 @@
+plugins {
+    id 'java-library'
+}
+
+description = 'Core domain models and business logic'
+
+// Self-contained Thrift-style code generation for the resolution fixture.
+// Keeping the output under build/generated/thrift exercises generated-source
+// discovery without requiring a system thrift executable or network access.
+def thriftOutputDir = layout.buildDirectory.dir('generated/thrift/main')
+
+tasks.register('compileThrift') {
+    inputs.dir('src/main/thrift')
+    outputs.dir(thriftOutputDir)
+    doLast {
+        def outputDir = thriftOutputDir.get().asFile
+        def packageDir = new File(outputDir, 'com/hyperion/example/core/thrift')
+        packageDir.mkdirs()
+        new File(packageDir, 'UserProfile.java').text = '''// Generated from src/main/thrift/user_profile.thrift.
+package com.hyperion.example.core.thrift;
+
+/** A Java representation generated from the example Thrift schema. */
+public final class UserProfile {
+    private final String id;
+    private final String displayName;
+
+    public UserProfile(String id, String displayName) {
+        this.id = id;
+        this.displayName = displayName;
+    }
+
+    public String getId() {
+        return id;
+    }
+
+    public String getDisplayName() {
+        return displayName;
+    }
+}
+'''
+    }
+}
+
+sourceSets {
+    main {
+        java.srcDir(thriftOutputDir)
+    }
+}
+
+tasks.named('compileJava') {
+    dependsOn(tasks.named('compileThrift'))
+}
+
+dependencies {
+    // Core utilities
+    implementation 'org.apache.commons:commons-lang3:3.13.0'
+    implementation 'com.google.guava:guava:32.1.2-jre'
+
+    // Logging
+    implementation 'org.slf4j:slf4j-api:2.0.9'
+
+    // Lombok for reducing boilerplate
+    compileOnly 'org.projectlombok:lombok:1.18.30'
+    annotationProcessor 'org.projectlombok:lombok:1.18.30'
+
+    // Validation
+    implementation 'jakarta.validation:jakarta.validation-api:3.0.2'
+}

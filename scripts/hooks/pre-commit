@@ -1,0 +1,4 @@
+#!/bin/sh
+# Check formatting without changing the working tree or partially staged files.
+set -eu
+cargo fmt --all -- --check

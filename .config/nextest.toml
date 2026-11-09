@@ -1,0 +1,44 @@
+# Hyperion test-execution policy (cargo-nextest).
+#
+# Why this exists: several integration tests index large generated workspaces. Run
+# concurrently they exhaust RAM and can hang/crash the machine. Those unbounded tests are
+# marked #[ignore]. Bounded real-JVM acceptance tests remain in the normal suite
+# and are serialized by the override below. This config additionally caps
+# global parallelism and safely serializes the heavy tests when explicitly run.
+#
+# Install once:   cargo install cargo-nextest --locked
+# Safe run:       cargo nextest run                      (skips opt-in heavy tests)
+# Heavy run:      cargo nextest run --profile heavy      (serialized, opt-in)
+
+[profile.default]
+# Bound parallelism so even non-ignored tests don't pile multiple large
+# indexes into memory at the same time. Tune to taste / RAM.
+test-threads = 4
+# Be patient before declaring a slow indexing test "stuck".
+slow-timeout = { period = "60s", terminate-after = 4 }
+
+# Opt-in profile that runs the #[ignore]d heavy tests, but safely.
+[profile.heavy]
+test-threads = 2
+run-ignored = "all"
+slow-timeout = { period = "180s", terminate-after = 3 }
+
+# Integration tests live in aggregator binaries, so a
+# nextest test name is `<group>::<former_file>::<test_fn>` rather than a bare
+# `<test_fn>`. The `[^:]*$` anchor keeps these filters matching the leaf test
+# name only, exactly as they did when every file was its own binary — without
+# it, `test(/fuzz/)` would also match cheap non-ignored tests that
+# merely live in a `fuzz_*` module and would force each of them to occupy the
+# whole test pool.
+# Any large-workspace / stress / fuzz / mass-parse / differential / JVM test must
+# occupy the whole test pool, i.e. it runs alone — never alongside another
+# resource-hungry test. This also covers the bounded default differential test.
+[[profile.heavy.overrides]]
+filter = 'test(/corpus[^:]*$/) | test(/fuzz[^:]*$/) | test(/stress[^:]*$/) | test(/mass_parse[^:]*$/) | test(/differential[^:]*$/) | test(/jvm[^:]*$/) | test(/autogen_navigation[^:]*$/)'
+threads-required = 'num-test-threads'
+
+# Same guard for the default profile, in case someone runs it with
+# `--run-ignored all` instead of the heavy profile.
+[[profile.default.overrides]]
+filter = 'test(/corpus[^:]*$/) | test(/fuzz[^:]*$/) | test(/stress[^:]*$/) | test(/mass_parse[^:]*$/) | test(/differential[^:]*$/) | test(/jvm[^:]*$/) | test(/autogen_navigation[^:]*$/)'
+threads-required = 'num-test-threads'

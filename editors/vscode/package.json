@@ -1,0 +1,143 @@
+{
+  "name": "hyperion-lsp",
+  "displayName": "Hyperion LSP",
+  "description": "Java/Kotlin Language Server",
+  "version": "0.1.0",
+  "publisher": "hyperion",
+  "license": "SEE LICENSE IN LICENSE",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hyperion-lsp/hyperion-lsp.git"
+  },
+  "engines": {
+    "vscode": "^1.82.0"
+  },
+  "categories": ["Programming Languages", "Debuggers"],
+  "activationEvents": [
+    "onLanguage:java",
+    "onLanguage:kotlin",
+    "onDebugResolve:hyperion"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      { "id": "kotlin", "extensions": [".kt", ".kts"] }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "Hyperion LSP",
+      "properties": {
+        "hyperion.serverPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to hyperion-lsp binary (searches PATH if empty)"
+        },
+        "hyperion.trace.server": {
+          "type": "string",
+          "enum": ["off", "messages", "verbose"],
+          "default": "off",
+          "description": "Trace communication with the language server"
+        }
+      }
+    },
+    "breakpoints": [
+      { "language": "java" }
+    ],
+    "debuggers": [
+      {
+        "type": "hyperion",
+        "label": "Hyperion Debugger (Java)",
+        "languages": ["java"],
+        "configurationAttributes": {
+          "launch": {
+            "required": ["mainClass"],
+            "properties": {
+              "mainClass": {
+                "type": "string",
+                "description": "Fully-qualified main class to launch, e.g. com.example.Main."
+              },
+              "classpath": {
+                "type": "string",
+                "description": "Classpath passed to `java -cp`."
+              },
+              "args": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Arguments passed to the program's main method."
+              },
+              "jvmArgs": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Extra JVM arguments, inserted before the main class."
+              },
+              "cwd": {
+                "type": "string",
+                "description": "Working directory for the launched JVM. Defaults to the workspace folder."
+              },
+              "projectRoot": {
+                "type": "string",
+                "description": "Project root used to resolve source files for breakpoints and stack frames."
+              }
+            }
+          },
+          "attach": {
+            "required": ["port"],
+            "properties": {
+              "host": {
+                "type": "string",
+                "description": "Host of the JDWP agent to attach to. Defaults to 127.0.0.1."
+              },
+              "port": {
+                "type": "number",
+                "description": "Port of the JDWP agent to attach to, e.g. from `-agentlib:jdwp=...address=<port>`."
+              },
+              "projectRoot": {
+                "type": "string",
+                "description": "Project root used to resolve source files for breakpoints and stack frames."
+              }
+            }
+          }
+        },
+        "configurationSnippets": [
+          {
+            "label": "Hyperion: Launch Java Program",
+            "description": "Launch a Java program with the Hyperion debugger.",
+            "body": {
+              "type": "hyperion",
+              "request": "launch",
+              "name": "Launch Java Program",
+              "mainClass": "com.example.Main",
+              "classpath": "${workspaceFolder}/target/classes",
+              "projectRoot": "${workspaceFolder}"
+            }
+          },
+          {
+            "label": "Hyperion: Attach to Java Process",
+            "description": "Attach the Hyperion debugger to a JVM started with -agentlib:jdwp=...",
+            "body": {
+              "type": "hyperion",
+              "request": "attach",
+              "name": "Attach to Java Process",
+              "port": 5005,
+              "projectRoot": "${workspaceFolder}"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "test": "npm run compile && node --test out/binary.test.js src/manifest.test.js",
+    "watch": "tsc -watch -p ./"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "1.82.0",
+    "typescript": "^5.0.0"
+  }
+}

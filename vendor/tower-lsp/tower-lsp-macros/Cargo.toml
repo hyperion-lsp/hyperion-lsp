@@ -1,0 +1,24 @@
+[package]
+name = "tower-lsp-macros"
+version = "0.9.0"
+authors = [
+    "Eyal Kalderon <ebkalderon@gmail.com>",
+    "Adrian Helvik",
+]
+description = "Internal procedural macros for tower-lsp (Hyperion fork)"
+edition = "2021"
+rust-version = "1.56.0"
+# The entire vendored fork, including local modifications, uses the upstream
+# dual license. See ../LICENSE-MIT, ../LICENSE-APACHE, and ../MODIFICATIONS.md.
+license = "MIT OR Apache-2.0"
+homepage = "https://github.com/ebkalderon/tower-lsp"
+repository = "https://github.com/ebkalderon/tower-lsp"
+publish = false
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }

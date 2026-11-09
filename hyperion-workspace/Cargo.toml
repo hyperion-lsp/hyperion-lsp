@@ -1,0 +1,78 @@
+[package]
+name = "hyperion-workspace"
+publish = false
+description = "Workspace source, archive, symbol and reference indexing"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Core dependencies
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+futures = "0.3"
+
+# Parser and syntax tree
+hyperion-parser = { path = "../hyperion-parser" }
+hyperion-kotlin = { path = "../hyperion-kotlin" }
+hyperion-groovy = { path = "../hyperion-groovy" }
+hyperion-scala = { path = "../hyperion-scala" }
+hyperion-types = { path = "../hyperion-types" }
+hyperion-bytecode = { path = "../hyperion-bytecode" }
+rowan = "0.15"
+tree-sitter.workspace = true
+
+# Path handling
+walkdir = "2.4"
+ignore = "0.4"  # Respects .gitignore
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+bincode = "1.3"
+lz4_flex = "0.11"  # LZ4 compression for cache
+
+# Hashing for cache file names
+sha2 = "0.10"
+hex = "0.4"
+
+# Concurrency
+parking_lot = "0.12"
+rayon = "1.8"  # Parallel iterators
+dashmap = "6.0"  # Concurrent HashMap for per-file locks
+
+# Logging
+tracing = "0.1"
+
+# Static initialization
+lazy_static = "1.4"
+
+# LSP types (must match tower-lsp's version)
+lsp-types.workspace = true
+
+# LRU cache for bounded file content caching
+lru.workspace = true
+smallvec.workspace = true
+
+# JAR/ZIP file handling
+zip = "9.1.3"
+tempfile.workspace = true
+
+# HTML parsing and conversion
+regex = "1.10"
+html-escape = "0.2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tracing-subscriber = "0.3"
+criterion.workspace = true
+
+[[bench]]
+name = "indexing"
+harness = false

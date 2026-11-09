@@ -1,0 +1,38 @@
+[package]
+name = "hyperion-scala"
+publish = false
+description = "Scala syntax and declaration extraction"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# LSP types for symbol kinds
+lsp-types.workspace = true
+
+# Error handling
+anyhow.workspace = true
+
+# Serialization
+serde = { workspace = true }
+
+# Logging
+tracing.workspace = true
+
+# Utilities
+regex.workspace = true
+
+# Tree-sitter parser for Scala
+tree-sitter = "0.22"
+tree-sitter-scala = "0.24"
+
+# Internal dependencies
+hyperion-types.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

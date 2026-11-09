@@ -1,0 +1,45 @@
+[package]
+name = "hyperion-kotlin"
+publish = false
+description = "Kotlin parsing and declaration extraction"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# Syntax tree
+rowan.workspace = true
+
+# Lexer
+logos.workspace = true
+
+# Error handling
+thiserror.workspace = true
+miette.workspace = true
+anyhow.workspace = true
+
+# Utilities
+itertools.workspace = true
+
+# Serialization
+serde.workspace = true
+
+# Logging
+tracing.workspace = true
+
+# LSP types
+lsp-types.workspace = true
+
+# Internal dependencies
+hyperion-parser.workspace = true
+hyperion-types.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+proptest.workspace = true
+walkdir = "2.5"

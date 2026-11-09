@@ -1,0 +1,40 @@
+plugins {
+    id 'java'
+}
+
+group = 'com.hyperion.example'
+version = '1.0.0-SNAPSHOT'
+
+allprojects {
+    repositories {
+        mavenCentral()
+    }
+}
+
+subprojects {
+    apply plugin: 'java'
+    apply plugin: 'java-library'
+
+    configurations {
+        developmentOnly
+    }
+
+    sourceCompatibility = '17'
+    targetCompatibility = '17'
+
+    dependencies {
+        // Common dependencies for all subprojects
+        testImplementation 'org.junit.jupiter:junit-jupiter-api:5.10.0'
+        testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.10.0'
+        testImplementation 'org.mockito:mockito-core:5.5.0'
+        testImplementation 'org.assertj:assertj-core:3.24.2'
+    }
+
+    test {
+        useJUnitPlatform()
+    }
+
+    tasks.withType(JavaCompile) {
+        options.encoding = 'UTF-8'
+    }
+}

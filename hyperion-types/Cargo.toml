@@ -1,0 +1,20 @@
+[package]
+name = "hyperion-types"
+publish = false
+description = "Shared JVM language declaration and type contracts"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+hyperion-parser.workspace = true
+rowan.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+# No additional dev dependencies needed yet

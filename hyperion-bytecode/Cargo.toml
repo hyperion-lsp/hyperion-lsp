@@ -1,0 +1,64 @@
+[package]
+name = "hyperion-bytecode"
+publish = false
+description = "JVM class-file execution and build-plugin inspection"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Error handling
+anyhow.workspace = true
+thiserror.workspace = true
+bigdecimal.workspace = true
+
+# Utilities
+itertools.workspace = true
+indexmap.workspace = true
+tempfile.workspace = true
+
+# Serialization
+serde.workspace = true
+
+# Logging
+tracing.workspace = true
+
+# Bytecode analysis
+# Using cafebabe instead of classfile-parser - more actively maintained, supports Java 21
+cafebabe = "0.9.0"
+cesu8 = "1.1"
+
+# Concurrent data structures
+dashmap.workspace = true
+parking_lot = "0.12"
+
+# Async runtime
+futures = "0.3"
+
+# Fast collections
+rustc-hash = "1.1"
+
+# Lazy statics
+once_cell = "1.19"
+
+# Pattern matching for Gradle extraction
+regex = "1.10"
+
+# Home directory detection
+dirs = "5.0"
+
+# ZIP/JAR file reading
+zip = "9.1.3"
+
+# Internal dependencies
+hyperion-groovy.workspace = true
+hyperion-kotlin.workspace = true
+hyperion-parser.workspace = true
+hyperion-types.workspace = true
+rowan.workspace = true
+
+[dev-dependencies]
+walkdir = "2.4"
+base64 = "0.22"

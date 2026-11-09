@@ -1,0 +1,46 @@
+[package]
+name = "hyperion-groovy"
+publish = false
+description = "Groovy parsing and Gradle DSL analysis"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Syntax tree
+rowan.workspace = true
+
+# Groovy parsing via tree-sitter
+tree-sitter = "0.22"
+tree-sitter-groovy = "0.1"
+
+# Lexer
+logos.workspace = true
+
+# Error handling
+thiserror.workspace = true
+miette.workspace = true
+anyhow.workspace = true
+
+# LSP types
+lsp-types.workspace = true
+
+# Utilities
+itertools.workspace = true
+once_cell.workspace = true
+
+# Serialization
+serde.workspace = true
+
+# Logging
+tracing.workspace = true
+
+# Internal dependencies
+hyperion-parser.workspace = true
+hyperion-types.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+proptest.workspace = true

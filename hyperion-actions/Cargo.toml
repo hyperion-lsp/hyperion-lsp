@@ -1,0 +1,37 @@
+[package]
+name = "hyperion-actions"
+publish = false
+description = "Language server code action support"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# LSP types
+lsp-types.workspace = true
+
+# Error handling
+anyhow.workspace = true
+thiserror.workspace = true
+
+# Utilities
+itertools.workspace = true
+
+# Serialization
+serde.workspace = true
+
+# Logging
+tracing.workspace = true
+
+# Internal dependencies
+hyperion-parser.workspace = true
+hyperion-semantics.workspace = true
+hyperion-refactor.workspace = true
+
+# Syntax tree
+rowan.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

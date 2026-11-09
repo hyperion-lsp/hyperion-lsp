@@ -1,0 +1,3 @@
+class IncompleteExpression {
+    int value = ;
+}

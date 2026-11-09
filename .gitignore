@@ -1,0 +1,41 @@
+# Build and package output at any depth.
+target/
+/target-validation/
+node_modules/
+__pycache__/
+.gradle/
+
+/scan-results/
+
+# Local assistant configuration and scratch material.
+.claude/
+.codex/
+/AGENTS.md
+/example-projects/
+/hyperion-index/
+/dot-github-do-not-enable/
+/docs/qa/
+/docs/refactoring/
+/fix_tests.sh
+/deploy-lsp.sh
+/benchmark_indexing.rs
+/create_jdk_cache.rs
+
+# Formatter distribution and local executables.
+palantir-java-format.jar
+palantir-java-format
+show-tokens
+verify_fix
+
+# Compiled probes; preserve source and test scripts.
+test-*
+test_*
+!test-*.rs
+!test-*.java
+!test_*.rs
+!test_*.java
+!test_*.sh
+
+# Images emitted by executable corpus fixtures.
+/*.png
+/hyperion-eval/*.png

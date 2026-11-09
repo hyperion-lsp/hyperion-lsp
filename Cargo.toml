@@ -1,0 +1,209 @@
+[workspace]
+resolver = "2"
+members = [
+    "hyperion-parser",
+    "hyperion-types",
+    "hyperion-lsp",
+    "hyperion-semantics",
+    "hyperion-build",
+    "hyperion-refactor",
+    "hyperion-actions",
+    "hyperion-bytecode",
+    "hyperion-workspace",
+    "hyperion-kotlin",
+    "hyperion-groovy",
+    "hyperion-fmt",
+    "hyperion-scala",
+    "hyperion-security",
+    "hyperion-eval",
+    "hyperion-jdwp",
+    "hyperion-dap",
+    "hyperion-layout",
+]
+# Third-party forks are path dependencies, not first-party workspace members.
+# Keeping them out of workspace-wide lint/format gates preserves upstream policy.
+exclude = ["vendor/tower-lsp", "vendor/tower-lsp/tower-lsp-macros"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Project Hyperion Contributors"]
+# Must match LICENSE and the per-file SPDX headers.
+license = "PolyForm-Shield-1.0.0"
+repository = "https://github.com/hyperion-lsp/hyperion-lsp"
+
+[workspace.lints.clippy]
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+# unwrap/expect: enforced per-crate in lib.rs where needed
+unwrap_used = { level = "allow", priority = 1 }
+expect_used = { level = "allow", priority = 1 }
+doc_markdown = { level = "allow", priority = 0 }
+must_use_candidate = { level = "allow", priority = 0 }
+missing_errors_doc = { level = "allow", priority = 0 }
+missing_panics_doc = { level = "allow", priority = 0 }
+# Allow architectural/style lints that are overly strict (priority 1 overrides pedantic/nursery at -1)
+too_many_lines = { level = "allow", priority = 1 }
+similar_names = { level = "allow", priority = 1 }
+return_self_not_must_use = { level = "allow", priority = 1 }
+if_same_then_else = { level = "allow", priority = 1 }
+items_after_statements = { level = "allow", priority = 1 }
+manual_let_else = { level = "allow", priority = 1 }
+doc_link_with_quotes = { level = "allow", priority = 1 }
+needless_continue = { level = "allow", priority = 1 }
+# Assertion spelling is a style choice; keep existing emptiness assertions
+# readable while preserving the same runtime invariant on newer Clippy versions.
+assert_is_empty = { level = "allow", priority = 1 }
+match_wildcard_for_single_variants = { level = "allow", priority = 1 }
+branches_sharing_code = { level = "allow", priority = 1 }
+# Style lints: allow globally, fix incrementally
+unused_self = { level = "allow", priority = 1 }
+match_same_arms = { level = "allow", priority = 1 }
+option_if_let_else = { level = "allow", priority = 1 }
+only_used_in_recursion = { level = "allow", priority = 1 }
+# Inline format args - style preference, allow globally
+uninlined_format_args = { level = "allow", priority = 1 }
+# Pedantic style lints allowed across the workspace
+literal_string_with_formatting_args = { level = "allow", priority = 1 }
+needless_raw_string_hashes = { level = "allow", priority = 1 }
+format_push_string = { level = "allow", priority = 1 }
+cast_possible_truncation = { level = "allow", priority = 1 }
+cast_sign_loss = { level = "allow", priority = 1 }
+cast_precision_loss = { level = "allow", priority = 1 }
+cast_lossless = { level = "allow", priority = 1 }
+cast_possible_wrap = { level = "allow", priority = 1 }
+needless_pass_by_value = { level = "allow", priority = 1 }
+significant_drop_tightening = { level = "allow", priority = 1 }
+redundant_closure_for_method_calls = { level = "allow", priority = 1 }
+implicit_clone = { level = "allow", priority = 1 }
+inline_always = { level = "allow", priority = 1 }
+module_name_repetitions = { level = "allow", priority = 1 }
+redundant_else = { level = "allow", priority = 1 }
+unnecessary_wraps = { level = "allow", priority = 1 }
+iter_without_into_iter = { level = "allow", priority = 1 }
+ref_option = { level = "allow", priority = 1 }
+single_match_else = { level = "allow", priority = 1 }
+unused_async = { level = "allow", priority = 1 }
+used_underscore_binding = { level = "allow", priority = 1 }
+useless_conversion = { level = "allow", priority = 1 }
+redundant_clone = { level = "allow", priority = 1 }
+type_complexity = { level = "allow", priority = 1 }
+too_many_arguments = { level = "allow", priority = 1 }
+struct_excessive_bools = { level = "allow", priority = 1 }
+or_fun_call = { level = "allow", priority = 1 }
+fn_params_excessive_bools = { level = "allow", priority = 1 }
+implicit_hasher = { level = "allow", priority = 1 }
+redundant_pub_crate = { level = "allow", priority = 1 }
+
+[workspace.dependencies]
+# Incremental computation
+salsa = "0.16"
+
+# LSP framework
+tower-lsp = { path = "vendor/tower-lsp" }
+lsp-types = "0.95"
+
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+
+# Syntax tree
+rowan = "0.15"
+
+# Lexer
+logos = "0.14"
+
+# Parallelism
+rayon = "1.8"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Concurrent data structures
+dashmap = "5.5"
+
+# Persistent (immutable) data structures
+im = "15.1"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+miette = { version = "7.0", features = ["fancy"] }
+
+# Exact decimal arithmetic
+bigdecimal = "0.4.10"
+
+# Logging and tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+
+# Testing
+criterion = { version = "0.5", features = ["html_reports"] }
+proptest = "1.4"
+tempfile = "3.8"
+
+# XML parsing
+roxmltree = "0.20"
+
+# Utilities
+indexmap = "2.12"
+itertools = "0.12"
+once_cell = "1.19"
+parking_lot = "0.12"
+lru = "0.12"
+regex = "1.10"
+unicode-ident = "1"
+unicode-general-category = "1.1"
+
+# Internal workspace crates
+hyperion-parser = { path = "hyperion-parser" }
+hyperion-types = { path = "hyperion-types" }
+hyperion-lsp = { path = "hyperion-lsp" }
+hyperion-semantics = { path = "hyperion-semantics" }
+hyperion-build = { path = "hyperion-build" }
+hyperion-layout = { path = "hyperion-layout" }
+hyperion-refactor = { path = "hyperion-refactor" }
+hyperion-actions = { path = "hyperion-actions" }
+hyperion-bytecode = { path = "hyperion-bytecode" }
+hyperion-workspace = { path = "hyperion-workspace" }
+hyperion-kotlin = { path = "hyperion-kotlin" }
+hyperion-groovy = { path = "hyperion-groovy" }
+hyperion-scala = { path = "hyperion-scala" }
+hyperion-fmt = { path = "hyperion-fmt" }
+hyperion-security = { path = "hyperion-security" }
+hyperion-eval = { path = "hyperion-eval" }
+
+# Additional utilities
+walkdir = "2.4"
+arrayvec = "0.7"
+smallvec = "1.11"
+clap = { version = "4.4", features = ["derive"] }
+
+# Binary protocol / codec
+bytes = "1.5"
+tokio-util = { version = "0.7", features = ["codec"] }
+
+# Tree-sitter
+tree-sitter = "0.22"
+tree-sitter-java = "0.21"
+
+# Internal workspace crate (new)
+hyperion-jdwp = { path = "hyperion-jdwp" }
+hyperion-dap = { path = "hyperion-dap" }
+
+# Build profiles
+#
+# Every `tests/*.rs` file becomes its own binary that statically links the whole
+# dependency graph. With 468 such binaries across the workspace, full debug
+# symbols made each one 90-450 MB (144 GB of target/debug) and turned
+# `cargo test --workspace` into a parallel link storm that swapped a 61 GB
+# machine. Line tables keep file/line in backtraces and panic messages, which is
+# what test failures actually need; full DWARF is only needed under a debugger.
+[profile.dev]
+debug = "line-tables-only"
+split-debuginfo = "unpacked"
+
+[profile.test]
+debug = "line-tables-only"
+split-debuginfo = "unpacked"

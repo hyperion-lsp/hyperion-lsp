@@ -1,0 +1,6 @@
+rootProject.name = 'hyperion-gradle-example'
+
+include 'core'
+include 'api'
+include 'service'
+include 'web'

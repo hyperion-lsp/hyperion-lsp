@@ -1,0 +1,47 @@
+[package]
+name = "hyperion-fmt"
+publish = false
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Java formatter implementing palantir-java-format style"
+
+[[bin]]
+name = "hyperion-fmt"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+# Syntax tree
+rowan.workspace = true
+
+# Internal dependencies
+hyperion-parser.workspace = true
+
+# Error handling
+thiserror.workspace = true
+
+# Utilities
+itertools.workspace = true
+
+# Persistent (immutable) data structures for the layout solver
+im.workspace = true
+
+# Logging
+tracing.workspace = true
+
+# Directory traversal
+walkdir.workspace = true
+
+[dev-dependencies]
+# Testing
+criterion.workspace = true
+proptest.workspace = true
+tempfile.workspace = true
+
+# Golden testing (diff-based)
+similar = "2.4"

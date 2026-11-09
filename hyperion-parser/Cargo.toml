@@ -1,0 +1,40 @@
+[package]
+name = "hyperion-parser"
+publish = false
+description = "Lossless Java syntax parser"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# Syntax tree
+rowan.workspace = true
+
+# Lexer
+logos.workspace = true
+
+# Error handling
+thiserror.workspace = true
+miette.workspace = true
+
+# Utilities
+itertools.workspace = true
+
+# Serialization
+serde.workspace = true
+
+# Logging
+tracing.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+proptest.workspace = true
+
+[[bench]]
+name = "incremental"
+harness = false

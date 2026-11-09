@@ -1,0 +1,25 @@
+[package]
+name = "hyperion-eval"
+publish = false
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Execute JVM code instantly without the JVM"
+
+[dependencies]
+hyperion-parser.workspace = true
+hyperion-kotlin.workspace = true
+hyperion-groovy.workspace = true
+hyperion-bytecode.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+
+[[bin]]
+name = "hyperion-eval"
+path = "src/main.rs"
+
+[lints]
+workspace = true
