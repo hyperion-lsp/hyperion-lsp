@@ -112,15 +112,5 @@ harness = false
 name = "hyperion-lsp"
 path = "src/main.rs"
 
-# Developer CLI for running diagnostics from CI. Not part of the release
-# archives: build it with `--features check-cli`.
-[[bin]]
-name = "hyperion-check"
-path = "src/bin/hyperion-check.rs"
-required-features = ["check-cli"]
-
-[features]
-check-cli = []
-
 [package.metadata.dist]
 dist = true
