@@ -1,0 +1,50 @@
+THIRD-PARTY LICENSES
+====================
+
+Hyperion LSP's own code is licensed under the PolyForm Shield License 1.0.0
+(see LICENSE). This file lists the third-party Rust crates that are compiled
+into the hyperion-lsp executable, together with the license terms they are
+distributed under. Those terms apply to the respective crates and are not
+changed by Hyperion's license. Additional attributions for code derived into
+the Hyperion source tree itself are in NOTICE.
+
+This file is generated at release time with cargo-about from Cargo.lock
+(configuration: about.toml, template: packaging/third-party-licenses.hbs) for
+the supported release targets. The exact crate versions are the ones listed
+below.
+
+Mozilla Public License 2.0 components
+-------------------------------------
+
+A few of the crates below are licensed under the Mozilla Public License,
+version 2.0 (MPL-2.0). The Hyperion executable contains these crates unmodified,
+in compiled form. Their complete corresponding source code is available from
+the locations given in their "Used by" entries (the crates.io source archive is
+the exact version that was built; the license text is reproduced in full in the
+MPL-2.0 section). Under the MPL, these files remain available to you under the
+MPL-2.0; Hyperion's own license does not restrict that.
+
+
+Overview of licenses
+--------------------
+
+{{#each overview}}  * {{{name}}} ({{{id}}}): {{{count}}} crate(s)
+{{/each}}
+
+Licenses and the crates that use them
+-------------------------------------
+
+{{#each licenses}}
+================================================================================
+{{{name}}} ({{{id}}})
+================================================================================
+
+Used by:
+{{#each used_by}}  * {{{crate.name}}} {{{crate.version}}}{{#if crate.repository}} - {{{crate.repository}}}{{/if}}
+{{#if (eq ../id "MPL-2.0")}}      source archive: https://static.crates.io/crates/{{{crate.name}}}/{{{crate.name}}}-{{{crate.version}}}.crate
+{{/if}}{{/each}}
+
+{{{text}}}
+
+
+{{/each}}
