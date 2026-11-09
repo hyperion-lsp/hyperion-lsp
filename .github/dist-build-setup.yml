@@ -1,0 +1,15 @@
+# Extra steps injected by dist into every release build job
+# (see `github-build-setup` in dist-workspace.toml).
+#
+# The release archives must carry the license notices of every third-party
+# crate compiled into the binary, including the MPL-2.0 source locations.
+- name: Install cargo-about
+  uses: taiki-e/install-action@v2
+  with:
+    tool: cargo-about@0.9.3
+- name: Generate THIRD_PARTY_LICENSES
+  shell: bash
+  run: |
+    cargo about generate --locked --manifest-path hyperion-lsp/Cargo.toml \
+      -c about.toml packaging/third-party-licenses.hbs -o THIRD_PARTY_LICENSES
+    test -s THIRD_PARTY_LICENSES

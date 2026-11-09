@@ -39,3 +39,6 @@ test_*
 # Images emitted by executable corpus fixtures.
 /*.png
 /hyperion-eval/*.png
+
+# Generated at release time by cargo-about (see about.toml).
+/THIRD_PARTY_LICENSES
