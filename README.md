@@ -226,40 +226,41 @@ hyperion-lsp dap                # Debug Adapter Protocol server over stdio
 
 ### Neovim
 
-The following configuration needs Neovim 0.11 or newer. The older example
-requires `nvim-lspconfig` to be installed.
+[`editors/nvim`](editors/nvim) is a Neovim plugin (also published as
+[`hyperion-lsp/hyperion.nvim`](https://github.com/hyperion-lsp/hyperion.nvim)).
+It needs Neovim 0.11 or newer and adds the server's `vim.lsp` config, a
+`:Hyperion` command (reload, run, debug, code lens, log), optional
+[nvim-dap](https://github.com/mfussenegger/nvim-dap) debugging, and
+`:checkhealth hyperion`. Put `hyperion-lsp` on your `PATH`, then with lazy.nvim:
+
+```lua
+{ 'hyperion-lsp/hyperion.nvim', opts = {} }  -- opts: server_path, extra_filetypes, ...
+```
+
+or with `vim.pack` (Neovim 0.12):
+
+```lua
+vim.pack.add({ 'https://github.com/hyperion-lsp/hyperion.nvim' })
+vim.lsp.enable('hyperion')
+```
+
+See [`editors/nvim/README.md`](editors/nvim/README.md) for the options and
+commands.
+
+Without the plugin, Neovim 0.11 or newer needs only this configuration:
 
 ```lua
 vim.lsp.config('hyperion', {
   cmd = { '/path/to/hyperion-lsp' },
   filetypes = { 'java', 'kotlin', 'groovy' },  -- add 'scala' only for the thin support described above
-  root_markers = { 'settings.gradle', 'settings.gradle.kts', 'pom.xml', 'build.gradle', 'build.gradle.kts', '.git' },
+  root_markers = {
+    { 'settings.gradle', 'settings.gradle.kts' },
+    '.git',
+    { 'pom.xml', 'build.gradle', 'build.gradle.kts' },
+  },
 })
 vim.lsp.enable('hyperion')
 ```
-
-<details>
-<summary>Older <code>nvim-lspconfig</code> style</summary>
-
-```lua
-local lspconfig = require('lspconfig')
-local configs = require('lspconfig.configs')
-
-if not configs.hyperion then
-  configs.hyperion = {
-    default_config = {
-      cmd = { '/path/to/hyperion-lsp' },
-      filetypes = { 'java', 'kotlin' },
-      root_dir = lspconfig.util.root_pattern('settings.gradle', 'settings.gradle.kts', 'pom.xml', 'build.gradle', 'build.gradle.kts', '.git'),
-      settings = {},
-    },
-  }
-end
-
-lspconfig.hyperion.setup {}
-```
-
-</details>
 
 ### VS Code
 
