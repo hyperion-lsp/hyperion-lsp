@@ -101,7 +101,7 @@ jobs:
         with:
           key: test-${{ strategy.job-index }}
       # Default nextest profile (.config/nextest.toml): test-threads = 4 and the
-      # #[ignore]d heavy tests are skipped; they belong to `--profile heavy`.
+      # #[ignore]d heavy tests are skipped; use `--profile heavy --run-ignored all` to opt in.
       - name: cargo nextest run
         env:
           PARTITION: ${{ matrix.partition }}

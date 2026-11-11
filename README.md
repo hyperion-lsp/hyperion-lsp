@@ -417,7 +417,7 @@ nice -n 10 cargo clippy -p hyperion-lsp --all-targets -j 4
 
 CI (`.github/workflows/ci.yml`) runs `cargo fmt --check`, `cargo clippy -D warnings`,
 the default `cargo nextest` profile (the `#[ignore]`d heavy tests are not run;
-use `--profile heavy` locally) and the VS Code extension build on every pull
+use `--profile heavy --run-ignored all` locally) and the VS Code extension build on every pull
 request. Release process: [RELEASING.md](RELEASING.md).
 
 Run checks for the crates you change, one Cargo command at a time. The local

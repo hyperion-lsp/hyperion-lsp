@@ -1764,7 +1764,7 @@ fn index_jdk_with_cache(
     }
 
     // Try to load from cache
-    let cache_dir = test_cache_root().join(format!("jdk-{}", version_str));
+    let cache_dir = test_jdk_cache_dir(&version_str);
 
     let symbols_path = cache_dir.join("symbols.bin");
     let metadata_path = cache_dir.join("metadata.json");
@@ -1843,23 +1843,28 @@ fn index_jdk_with_cache(
     );
 
     let index_start = std::time::Instant::now();
-    let result = hyperion_workspace::jdk_integration::index_jdk_classes(index)
+    // Source fixtures can deliberately shadow java.lang.String or collection
+    // types. The compatibility snapshot contains elected symbols, so building
+    // it from the fixture's index would permanently omit those JDK classes.
+    // Extract and cache from an independent index, then publish into the fixture.
+    let jdk_index = WorkspaceIndex::new(cache_dir.clone());
+    let result = hyperion_workspace::jdk_integration::index_jdk_classes(&jdk_index)
         .map_err(|e| format!("JDK indexing failed: {}", e))?;
     let index_time = index_start.elapsed();
+    let (symbols, generic_supertypes) = jdk_index.get_external_index_data();
+    let indexed_data = Arc::new(JdkIndexData {
+        symbols,
+        generic_supertypes,
+    });
+    drop(jdk_index);
 
-    // Populate process-local cache from freshly indexed symbols.
-    let (indexed_symbols, generic_supertypes) = index.get_external_index_data();
-    if !indexed_symbols.is_empty() {
-        if let Ok(mut cache) = jdk_symbols_memory_cache().write() {
-            cache.insert(
-                version_str.clone(),
-                Arc::new(JdkIndexData {
-                    symbols: indexed_symbols,
-                    generic_supertypes,
-                }),
-            );
-        }
+    if let Ok(mut cache) = jdk_symbols_memory_cache().write() {
+        cache.insert(version_str.clone(), Arc::clone(&indexed_data));
     }
+    index.add_external_index_data_responsive(
+        indexed_data.symbols.clone(),
+        indexed_data.generic_supertypes.clone(),
+    );
 
     eprintln!(
         "TEST JDK indexed {} classes from bytecode in {:.2}ms",
@@ -1869,7 +1874,7 @@ fn index_jdk_with_cache(
 
     // Save to cache for next time
     let save_start = std::time::Instant::now();
-    if let Err(e) = save_jdk_cache(index, &version_str, &jdk_info._java_home) {
+    if let Err(e) = save_jdk_cache(&indexed_data, &version_str, &jdk_info._java_home) {
         eprintln!("Warning: Failed to save JDK cache: {}", e);
     } else {
         let save_time = save_start.elapsed();
@@ -1901,6 +1906,12 @@ fn test_cache_root() -> PathBuf {
     }
     // Stable path so multiple test binaries can reuse the same JDK cache.
     std::env::temp_dir().join("hyperion-test-cache")
+}
+
+/// Retire caches produced from fixture-dependent elected snapshots. This is a
+/// test-cache content revision, independent of the production binary format.
+fn test_jdk_cache_dir(version: &str) -> PathBuf {
+    test_cache_root().join(format!("jdk-{version}-isolated-v1"))
 }
 
 fn jdk_cache_singleflight() -> &'static std::sync::Mutex<()> {
@@ -1941,11 +1952,11 @@ struct JdkTestInfo {
 
 /// Save JDK symbols to cache (for test suite optimization)
 fn save_jdk_cache(
-    index: &hyperion_workspace::index::WorkspaceIndex,
+    indexed_data: &JdkIndexData,
     jdk_version: &str,
     java_home: &std::path::Path,
 ) -> Result<(), String> {
-    let cache_dir = test_cache_root().join(format!("jdk-{}", jdk_version));
+    let cache_dir = test_jdk_cache_dir(jdk_version);
 
     // Ensure cache directory exists
     std::fs::create_dir_all(&cache_dir)
@@ -1962,8 +1973,8 @@ fn save_jdk_cache(
         }
     };
 
-    // Get all external symbols and generic hierarchy edges (JDK index data).
-    let (symbols, generic_supertypes) = index.get_external_index_data();
+    let symbols = &indexed_data.symbols;
+    let generic_supertypes = indexed_data.generic_supertypes.clone();
 
     // Convert to cached format
     let cached_symbols: Vec<hyperion_workspace::CachedSymbol> = symbols

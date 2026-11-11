@@ -8,7 +8,7 @@
 #
 # Install once:   cargo install cargo-nextest --locked
 # Safe run:       cargo nextest run                      (skips opt-in heavy tests)
-# Heavy run:      cargo nextest run --profile heavy      (serialized, opt-in)
+# Heavy run:      cargo nextest run --profile heavy --run-ignored all (serialized, opt-in)
 
 [profile.default]
 # Bound parallelism so even non-ignored tests don't pile multiple large
@@ -20,7 +20,6 @@ slow-timeout = { period = "60s", terminate-after = 4 }
 # Opt-in profile that runs the #[ignore]d heavy tests, but safely.
 [profile.heavy]
 test-threads = 2
-run-ignored = "all"
 slow-timeout = { period = "180s", terminate-after = 3 }
 
 # Integration tests live in aggregator binaries, so a
@@ -38,7 +37,7 @@ filter = 'test(/corpus[^:]*$/) | test(/fuzz[^:]*$/) | test(/stress[^:]*$/) | tes
 threads-required = 'num-test-threads'
 
 # Same guard for the default profile, in case someone runs it with
-# `--run-ignored all` instead of the heavy profile.
+# `--run-ignored all` without selecting the heavy profile.
 [[profile.default.overrides]]
 filter = 'test(/corpus[^:]*$/) | test(/fuzz[^:]*$/) | test(/stress[^:]*$/) | test(/mass_parse[^:]*$/) | test(/differential[^:]*$/) | test(/jvm[^:]*$/) | test(/autogen_navigation[^:]*$/)'
 threads-required = 'num-test-threads'
