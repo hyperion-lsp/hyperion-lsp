@@ -16,6 +16,60 @@ use hyperion_parser::{SyntaxKind, SyntaxNode};
 use hyperion_workspace::ImportMap;
 use rowan::{NodeOrToken, TextRange};
 
+/// Result expressions of one switch, shared by expression and `var` inference.
+///
+/// A missing expression is retained as `None` so incomplete source cannot be
+/// inferred from only its remaining, known branches. Arrow expressions and
+/// yields may contain continuation siblings (for example `1 + 2 + 3L`); the
+/// last child represents the complete value.
+pub(crate) fn switch_result_expressions(switch: &SyntaxNode) -> Vec<Option<SyntaxNode>> {
+    let mut results = Vec::new();
+    for case in switch
+        .children()
+        .filter(|node| node.kind() == SyntaxKind::CASE_CLAUSE)
+    {
+        let mut body = case.children_with_tokens();
+        if body.any(|element| element.kind() == SyntaxKind::ARROW) {
+            let arrow_result = body.filter_map(NodeOrToken::into_node).last();
+            match arrow_result {
+                Some(node) if node.kind() == SyntaxKind::THROW_STMT => {}
+                Some(node) if node.kind() == SyntaxKind::BLOCK_STMT => {
+                    collect_switch_yields(&node, &mut results);
+                }
+                expression => results.push(expression),
+            }
+        } else {
+            // A colon group can yield from several conditional paths, or fall
+            // through without yielding. Every yield belongs to the same switch.
+            collect_switch_yields(&case, &mut results);
+        }
+    }
+    results
+}
+
+fn collect_switch_yields(root: &SyntaxNode, results: &mut Vec<Option<SyntaxNode>>) {
+    let mut traversal = root.preorder();
+    while let Some(event) = traversal.next() {
+        let rowan::WalkEvent::Enter(node) = event else {
+            continue;
+        };
+        let kind = node.kind();
+        if kind == SyntaxKind::YIELD_STMT {
+            results.push(node.children().last());
+            traversal.skip_subtree();
+        } else if kind == SyntaxKind::SWITCH_EXPR
+            || kind == SyntaxKind::LAMBDA_EXPR
+            || kind.is_type_declaration()
+            || kind.is_member_declaration()
+        {
+            // Nested switches own their yields. Executable bodies in local or
+            // anonymous classes and lambdas cannot yield across that boundary.
+            // A nested switch *statement* is not a boundary: it may yield to us.
+            traversal.skip_subtree();
+        }
+    }
+}
+
 /// Build an ImportMap from the syntax tree of a Java source file.
 ///
 /// Extracts the package declaration, explicit imports, wildcard imports,

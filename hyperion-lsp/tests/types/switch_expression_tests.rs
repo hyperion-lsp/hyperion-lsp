@@ -7,6 +7,62 @@
 lsp_test_suite! {
     name: "Switch Expression Navigation",
 
+    test nested_switch_in_arm_keeps_outer_var_navigation {
+        files: {
+            "com/example/Main.java" => r#"
+                package com.example;
+                class Main {
+                    void run(int mode) {
+                        var message = switch (mode) {
+                            case 0 -> {
+                                int retryCount = switch (mode) {
+                                    default -> { yield 3; }
+                                };
+                                yield "ready";
+                            }
+                            default -> "waiting";
+                        };
+                        message.toUpperCa<|>se();
+                    }
+                }
+            "#,
+            "java/lang/String.java" => r"
+                package java.lang;
+                public final class String {
+                    public String toUpperCase() { return this; }
+                }
+            "
+        },
+        nav: "com/example/Main.java", "<|>" => "String.java"
+    }
+
+    test switch_yielded_local_keeps_outer_var_navigation {
+        files: {
+            "com/example/Main.java" => r#"
+                package com.example;
+                class Main {
+                    void run(int mode) {
+                        var message = switch (mode) {
+                            case 0 -> {
+                                var status = "ready";
+                                yield status;
+                            }
+                            default -> "waiting";
+                        };
+                        message.toUpperCa<|>se();
+                    }
+                }
+            "#,
+            "java/lang/String.java" => r"
+                package java.lang;
+                public final class String {
+                    public String toUpperCase() { return this; }
+                }
+            "
+        },
+        nav: "com/example/Main.java", "<|>" => "String.java"
+    }
+
     test switch_expression_method_calls {
         files: {
             "com/example/Main.java" => r"

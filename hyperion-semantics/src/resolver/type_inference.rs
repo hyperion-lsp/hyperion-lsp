@@ -570,116 +570,21 @@ impl ResolverBuilder {
     ///
     /// Switch expression type is the least upper bound (LUB) of all arm types.
     fn infer_switch_expression_type(&self, switch_expr: &SyntaxNode) -> Type {
-        let mut arm_types = Vec::new();
-
-        for child in switch_expr.children() {
-            if child.kind() != SyntaxKind::CASE_CLAUSE {
-                continue;
+        let mut common = None;
+        for expression in crate::utils::switch_result_expressions(switch_expr) {
+            let Some(expression) = expression else {
+                return Type::Unknown;
+            };
+            let result_type = self.infer_expression_type(&expression);
+            if result_type == Type::Unknown {
+                return Type::Unknown;
             }
-
-            if let Some(arm_type) = self.infer_switch_case_clause_type(&child) {
-                if !matches!(arm_type, Type::Unknown) {
-                    arm_types.push(arm_type);
-                }
-            }
+            common = Some(common.map_or_else(
+                || result_type.clone(),
+                |previous| self.find_lub(&previous, &result_type),
+            ));
         }
-
-        if arm_types.is_empty() {
-            return Type::Unknown;
-        }
-
-        let mut common = arm_types[0].clone();
-        for arm_type in arm_types.iter().skip(1) {
-            common = self.find_lub(&common, arm_type);
-        }
-
-        common
-    }
-
-    /// Infer the result type for a single switch case clause.
-    ///
-    /// Supports:
-    /// - Arrow form: `case X -> expr`
-    /// - Block+yield form: `case X -> { yield expr; }`
-    /// - Traditional form with yield statements
-    fn infer_switch_case_clause_type(&self, case_clause: &SyntaxNode) -> Option<Type> {
-        let mut found_arrow = false;
-
-        for child in case_clause.children_with_tokens() {
-            match child {
-                rowan::NodeOrToken::Token(token) if token.kind() == SyntaxKind::ARROW => {
-                    found_arrow = true;
-                }
-                rowan::NodeOrToken::Node(node) if found_arrow => {
-                    if node.kind() == SyntaxKind::BLOCK_STMT {
-                        return self.infer_yield_type_in_block(&node);
-                    }
-
-                    // `throw` arm has no expression type contribution.
-                    if node.kind() == SyntaxKind::THROW_STMT {
-                        return None;
-                    }
-
-                    return Some(self.infer_expression_type(&node));
-                }
-                rowan::NodeOrToken::Node(node) if node.kind() == SyntaxKind::YIELD_STMT => {
-                    return self.extract_yield_expression_type(&node);
-                }
-                _ => {}
-            }
-        }
-
-        for descendant in case_clause.descendants() {
-            if descendant.kind() == SyntaxKind::YIELD_STMT {
-                return self.extract_yield_expression_type(&descendant);
-            }
-        }
-
-        None
-    }
-
-    fn infer_yield_type_in_block(&self, block: &SyntaxNode) -> Option<Type> {
-        for descendant in block.descendants() {
-            if descendant.kind() == SyntaxKind::YIELD_STMT {
-                return self.extract_yield_expression_type(&descendant);
-            }
-        }
-        None
-    }
-
-    fn extract_yield_expression_type(&self, yield_stmt: &SyntaxNode) -> Option<Type> {
-        for child in yield_stmt.children() {
-            if Self::is_switch_arm_expression_kind(child.kind()) {
-                return Some(self.infer_expression_type(&child));
-            }
-        }
-        None
-    }
-
-    const fn is_switch_arm_expression_kind(kind: SyntaxKind) -> bool {
-        matches!(
-            kind,
-            SyntaxKind::LITERAL_EXPR
-                | SyntaxKind::NAME_EXPR
-                | SyntaxKind::FIELD_ACCESS_EXPR
-                | SyntaxKind::METHOD_CALL_EXPR
-                | SyntaxKind::NEW_EXPR
-                | SyntaxKind::BINARY_EXPR
-                | SyntaxKind::UNARY_EXPR
-                | SyntaxKind::PAREN_EXPR
-                | SyntaxKind::CAST_EXPR
-                | SyntaxKind::TERNARY_EXPR
-                | SyntaxKind::SWITCH_EXPR
-                | SyntaxKind::THIS_EXPR
-                | SyntaxKind::SUPER_EXPR
-                | SyntaxKind::LAMBDA_EXPR
-                | SyntaxKind::ARRAY_ACCESS_EXPR
-                | SyntaxKind::ARRAY_INIT_EXPR
-                | SyntaxKind::CLASS_LITERAL_EXPR
-                | SyntaxKind::METHOD_REF_EXPR
-                | SyntaxKind::INSTANCEOF_EXPR
-                | SyntaxKind::ASSIGNMENT_EXPR
-        )
+        common.unwrap_or(Type::Unknown)
     }
 
     /// Resolve the target type for a diamond `new Foo<>()` expression.

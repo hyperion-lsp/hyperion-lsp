@@ -522,107 +522,15 @@ fn infer_switch_expression(
     node: &SyntaxNode,
     resolver: &SymbolResolver,
 ) -> Type {
-    debug!("Inferring switch expression type");
-
-    let mut arm_types: Vec<Type> = Vec::new();
-
-    // Find all CASE_CLAUSE children
-    for child in node.children() {
-        if child.kind() == SyntaxKind::CASE_CLAUSE {
-            if let Some(arm_type) = infer_case_clause_type(engine, &child, resolver) {
-                debug!("Case clause type: {:?}", arm_type);
-                arm_types.push(arm_type);
-            }
-        }
-    }
-
-    if arm_types.is_empty() {
-        debug!("No arm types found in switch expression");
-        return Type::Unknown;
-    }
-
-    // Find common supertype of all arm types
-    find_common_supertype(engine, &arm_types)
-}
-
-/// Infer the type of a case clause's result expression
-///
-/// Handles both arrow syntax (`case X -> expr`) and block syntax with yield.
-fn infer_case_clause_type(
-    engine: &TypeInferenceEngine,
-    case_clause: &SyntaxNode,
-    resolver: &SymbolResolver,
-) -> Option<Type> {
-    // Look for arrow (->) followed by expression, or block containing yield
-    let mut found_arrow = false;
-
-    for child in case_clause.children_with_tokens() {
-        match child {
-            NodeOrToken::Token(token) if token.kind() == SyntaxKind::ARROW => {
-                found_arrow = true;
-            }
-            NodeOrToken::Node(node) if found_arrow => {
-                // Expression or block after arrow
-                if node.kind() == SyntaxKind::BLOCK_STMT {
-                    // Block syntax - look for yield statements
-                    return find_yield_type(engine, &node, resolver);
-                } else if node.kind() == SyntaxKind::THROW_STMT {
-                    // throw statements don't contribute to the result type
-                    return None;
-                }
-                // Direct expression after arrow
-                return Some(infer_expression(engine, &node, resolver, None));
-            }
-            NodeOrToken::Token(token) if token.kind() == SyntaxKind::COLON => {
-                // Traditional colon syntax - look for yield in statements
-            }
-            NodeOrToken::Node(node) if node.kind() == SyntaxKind::YIELD_STMT => {
-                // Found a yield statement in traditional syntax
-                return extract_yield_expression_type(engine, &node, resolver);
-            }
-            _ => {}
-        }
-    }
-
-    // For traditional colon syntax, check descendants for yield
-    for descendant in case_clause.descendants() {
-        if descendant.kind() == SyntaxKind::YIELD_STMT {
-            return extract_yield_expression_type(engine, &descendant, resolver);
-        }
-    }
-
-    None
-}
-
-/// Find the type of yield statements in a block
-fn find_yield_type(
-    engine: &TypeInferenceEngine,
-    block: &SyntaxNode,
-    resolver: &SymbolResolver,
-) -> Option<Type> {
-    // Search for YIELD_STMT in the block
-    for descendant in block.descendants() {
-        if descendant.kind() == SyntaxKind::YIELD_STMT {
-            return extract_yield_expression_type(engine, &descendant, resolver);
-        }
-    }
-    None
-}
-
-/// Extract the type of the expression in a yield statement
-fn extract_yield_expression_type(
-    engine: &TypeInferenceEngine,
-    yield_stmt: &SyntaxNode,
-    resolver: &SymbolResolver,
-) -> Option<Type> {
-    // YIELD_STMT structure: yield expression ;
-    for child in yield_stmt.children() {
-        // Skip YIELD_KW token, find the expression
-        if is_expression_kind(child.kind()) {
-            return Some(infer_expression(engine, &child, resolver, None));
-        }
-    }
-    None
+    let result_types: Vec<_> = crate::utils::switch_result_expressions(node)
+        .into_iter()
+        .map(|expression| {
+            expression.map_or(Type::Unknown, |expression| {
+                infer_expression(engine, &expression, resolver, None)
+            })
+        })
+        .collect();
+    find_common_supertype(engine, &result_types)
 }
 
 /// Find the common supertype of multiple types
@@ -644,8 +552,9 @@ pub(super) fn find_common_supertype(engine: &TypeInferenceEngine, types: &[Type]
     for ty in types.iter().skip(1) {
         result = lub_two_types(engine, &result, ty);
         if result == Type::Unknown {
-            // If we hit Unknown, keep going - we might recover with Object
-            result = Type::Class(ClassType::object());
+            // An unresolved result may change the inferred type. Do not turn
+            // incomplete classpath information into a definite Object type.
+            return Type::Unknown;
         }
     }
 

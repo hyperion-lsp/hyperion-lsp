@@ -500,6 +500,16 @@ impl ResolverBuilder {
     }
 
     fn process_local_var(&mut self, node: &SyntaxNode) {
+        let inferred = node
+            .children()
+            .any(|child| child.kind() == SyntaxKind::VAR_TYPE);
+        if inferred {
+            // A switch initializer can yield its arm-local variables or pattern
+            // bindings. Build those scopes before inferring the enclosing var.
+            // An inferred variable cannot legally refer to itself in its own
+            // initializer; explicit declarations keep their existing ordering.
+            self.walk_initializer(node);
+        }
         let mut declarators = crate::utils::declarator_identifiers(node);
         if declarators.is_empty() {
             declarators = self
@@ -534,7 +544,9 @@ impl ResolverBuilder {
             }
         }
 
-        self.walk_initializer(node);
+        if !inferred {
+            self.walk_initializer(node);
+        }
     }
 
     /// Walk the initializer expression of a field or local variable declaration.
