@@ -208,7 +208,7 @@ async fn test_profile_properties_override() {
 }
 
 #[tokio::test]
-async fn test_multiple_profiles_activated() {
+async fn test_jdk_activation_suppresses_default_profile() {
     let pom_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0">
     <modelVersion>4.0.0</modelVersion>
@@ -268,8 +268,8 @@ async fn test_multiple_profiles_activated() {
         .await
         .unwrap();
 
-    // Should have all dependencies (base + both profiles)
-    assert_eq!(project.dependencies.len(), 3, "Should have 3 dependencies");
+    // A matching implicit condition disables default profiles from this POM.
+    assert_eq!(project.dependencies.len(), 2, "Should have 2 dependencies");
 
     let has_base = project
         .dependencies
@@ -285,7 +285,7 @@ async fn test_multiple_profiles_activated() {
         .any(|d| d.artifact_id == "profile-2-lib");
 
     assert!(has_base, "Should have base dependency");
-    assert!(has_profile_1, "Should have profile-1 dependency");
+    assert!(!has_profile_1, "Default profile must be inactive");
     assert!(has_profile_2, "Should have profile-2 dependency");
 }
 
@@ -443,4 +443,280 @@ async fn test_no_profiles_empty_project() {
 
     // Dependencies should be unchanged
     assert_eq!(project.dependencies.len(), initial_deps);
+}
+
+#[tokio::test]
+async fn profiles_without_implicit_activation_do_not_change_the_project() {
+    for activation in [
+        "",
+        "<activation/>",
+        "<activation><activeByDefault>false</activeByDefault></activation>",
+    ] {
+        let fixture = create_test_project(&format!(
+            r#"
+<project><modelVersion>4.0.0</modelVersion><groupId>org.example</groupId>
+<artifactId>service</artifactId><version>1</version>
+<properties><environment>development</environment></properties>
+<profiles><profile><id>production</id>{activation}
+<properties><environment>production</environment></properties>
+<dependencies><dependency><groupId>org.example</groupId><artifactId>production-driver</artifactId><version>1</version></dependency></dependencies>
+</profile></profiles></project>"#
+        ));
+        let mut project = MavenParser::parse_project(fixture.path()).await.unwrap();
+        let context = ProfileActivationContext::new(fixture.path().into());
+        MavenResolver::with_repository(fixture.path().join("repository"))
+            .activate_profiles(&mut project, &context)
+            .await
+            .unwrap();
+        assert!(
+            project.dependencies.is_empty(),
+            "Unexpected production dependency with {activation:?}"
+        );
+        assert_eq!(project.properties["environment"], "development");
+    }
+}
+
+#[tokio::test]
+async fn active_by_default_is_a_fallback_for_the_profiles_in_one_pom() {
+    let fixture = create_test_project(
+        r#"
+<project><modelVersion>4.0.0</modelVersion><groupId>org.example</groupId>
+<artifactId>service</artifactId><version>1</version>
+<profiles>
+<profile><id>development</id><activation><activeByDefault>true</activeByDefault></activation>
+<properties><environment>development</environment></properties>
+<dependencies><dependency><groupId>org.example</groupId><artifactId>development-driver</artifactId><version>1</version></dependency></dependencies></profile>
+<profile><id>defaults</id><activation><activeByDefault>true</activeByDefault></activation><properties><defaults>yes</defaults></properties></profile>
+<profile><id>production</id><activation><property><name>environment</name><value>production</value></property></activation>
+<properties><environment>production</environment></properties>
+<dependencies><dependency><groupId>org.example</groupId><artifactId>production-driver</artifactId><version>1</version></dependency></dependencies></profile>
+</profiles></project>"#,
+    );
+    let repository = fixture.path().join("repository");
+    for artifact in ["development-driver", "production-driver"] {
+        let dir = repository.join(format!("org/example/{artifact}/1"));
+        std::fs::create_dir_all(&dir).unwrap();
+        zip::ZipWriter::new(std::fs::File::create(dir.join(format!("{artifact}-1.jar"))).unwrap())
+            .finish()
+            .unwrap();
+        std::fs::write(dir.join(format!("{artifact}-1.pom")), format!(
+            "<project><modelVersion>4.0.0</modelVersion><groupId>org.example</groupId><artifactId>{artifact}</artifactId><version>1</version></project>"
+        )).unwrap();
+    }
+    let resolver = MavenResolver::with_repository(repository.clone());
+    for production in [false, true] {
+        let mut project = MavenParser::parse_project(fixture.path()).await.unwrap();
+        let mut context = ProfileActivationContext::new(fixture.path().into());
+        if production {
+            context.set_property("environment".into(), "production".into());
+        }
+        resolver
+            .activate_profiles(&mut project, &context)
+            .await
+            .unwrap();
+        let expected = if production {
+            "production"
+        } else {
+            "development"
+        };
+        assert_eq!(
+            project
+                .dependencies
+                .iter()
+                .map(|d| d.artifact_id.as_str())
+                .collect::<Vec<_>>(),
+            [format!("{expected}-driver")]
+        );
+        assert_eq!(project.properties["environment"], expected);
+        assert_eq!(project.properties.contains_key("defaults"), !production);
+        let report = resolver
+            .resolve_dependencies_with_report(&project, usize::MAX)
+            .await;
+        assert!(report.complete, "{:?}", report.issues);
+        assert_eq!(
+            report.resolved_jars,
+            [repository.join(format!(
+                "org/example/{expected}-driver/1/{expected}-driver-1.jar"
+            ))]
+        );
+        assert_eq!(report.main_jars, report.resolved_jars);
+    }
+}
+
+#[tokio::test]
+async fn implicit_profile_activation_requires_every_condition() {
+    for java_version in ["17", "21"] {
+        let fixture = create_test_project(
+            r#"
+<project><modelVersion>4.0.0</modelVersion><groupId>org.example</groupId>
+<artifactId>service</artifactId><version>1</version><profiles>
+<profile><id>native</id><activation><jdk>21</jdk><property><name>native</name></property></activation>
+<properties><selected>yes</selected></properties></profile>
+</profiles></project>"#,
+        );
+        let mut project = MavenParser::parse_project(fixture.path()).await.unwrap();
+        let mut context = ProfileActivationContext::new(fixture.path().into());
+        context.java_version = java_version.into();
+        context.set_property("native".into(), "true".into());
+        MavenResolver::new()
+            .activate_profiles(&mut project, &context)
+            .await
+            .unwrap();
+        assert_eq!(
+            project.properties.contains_key("selected"),
+            java_version == "21"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_default_profile_can_also_activate_by_its_own_conditions() {
+    let fixture = create_test_project(
+        r#"
+<project><modelVersion>4.0.0</modelVersion><groupId>org.example</groupId>
+<artifactId>service</artifactId><version>1</version><profiles>
+<profile><id>fallback</id><activation><activeByDefault>true</activeByDefault></activation><properties><fallback>yes</fallback></properties></profile>
+<profile><id>conditional-default</id><activation><activeByDefault>true</activeByDefault><property><name>native</name></property></activation><properties><native>yes</native></properties></profile>
+</profiles></project>"#,
+    );
+    for native in [false, true] {
+        let mut project = MavenParser::parse_project(fixture.path()).await.unwrap();
+        let mut context = ProfileActivationContext::new(fixture.path().into());
+        if native {
+            context.set_property("native".into(), "true".into());
+        }
+        MavenResolver::new()
+            .activate_profiles(&mut project, &context)
+            .await
+            .unwrap();
+        assert!(project.properties.contains_key("native"));
+        assert_eq!(project.properties.contains_key("fallback"), !native);
+    }
+}
+
+#[tokio::test]
+async fn unsupported_or_invalid_activation_does_not_apply_a_profile() {
+    for condition in [
+        "<os><family>windows</family></os>",
+        "<futureActivator/>",
+        "<futureActivator>value</futureActivator>",
+        "<property><value>value</value></property>",
+        "<activeByDefault>${unknown}</activeByDefault>",
+    ] {
+        let fixture = create_test_project(&format!(
+            r#"
+<project><modelVersion>4.0.0</modelVersion><groupId>org.example</groupId>
+<artifactId>service</artifactId><version>1</version><profiles>
+<profile><id>unmodeled</id><activation><activeByDefault>true</activeByDefault>{condition}</activation><properties><selected>yes</selected></properties></profile>
+</profiles></project>"#
+        ));
+        let mut project = MavenParser::parse_project(fixture.path()).await.unwrap();
+        let context = ProfileActivationContext::new(fixture.path().into());
+        MavenResolver::new()
+            .activate_profiles(&mut project, &context)
+            .await
+            .unwrap();
+        assert!(!project.properties.contains_key("selected"), "{condition}");
+        assert!(project.unmodeled_features.iter().any(|feature|
+            feature.contains("activation") || feature.contains("static boolean")
+        ), "{condition}: {:?}", project.unmodeled_features);
+    }
+}
+
+#[tokio::test]
+async fn parent_default_profiles_are_selected_independently_of_child_profiles() {
+    let fixture = create_test_project(
+        r#"
+<project><modelVersion>4.0.0</modelVersion><groupId>org.example</groupId>
+<artifactId>parent</artifactId><version>1</version><packaging>pom</packaging>
+<build><sourceDirectory>custom-source</sourceDirectory></build><profiles>
+<profile><id>defaults</id><activation><activeByDefault>true</activeByDefault></activation><properties><parent.default>yes</parent.default></properties></profile>
+</profiles></project>"#,
+    );
+    let child = fixture.path().join("child");
+    std::fs::create_dir(&child).unwrap();
+    std::fs::write(child.join("pom.xml"), r#"
+<project><modelVersion>4.0.0</modelVersion>
+<parent><groupId>org.example</groupId><artifactId>parent</artifactId><version>1</version></parent>
+<artifactId>child</artifactId><profiles>
+<profile><id>defaults</id><activation><activeByDefault>true</activeByDefault></activation><properties><child.default>yes</child.default></properties></profile>
+<profile><id>selected</id><activation><file><exists>pom.xml</exists></file></activation><properties><child.selected>yes</child.selected></properties></profile>
+</profiles></project>"#).unwrap();
+    let resolver = MavenResolver::with_repository(fixture.path().join("repository"));
+    let mut project = MavenParser::parse_project(&child).await.unwrap();
+    let context = ProfileActivationContext::new(child);
+    resolver
+        .activate_profiles(&mut project, &context)
+        .await
+        .unwrap();
+    resolver.resolve_parent_pom(&mut project).await.unwrap();
+    assert_eq!(project.properties["parent.default"], "yes");
+    assert_eq!(project.properties["child.selected"], "yes");
+    assert!(!project.properties.contains_key("child.default"));
+    assert!(
+        project
+            .unmodeled_features
+            .iter()
+            .any(|feature| feature.contains("custom build source/output paths")),
+        "parent completeness blockers must survive inheritance"
+    );
+    assert!(!resolver.finalize_project_dependencies(&mut project));
+}
+
+#[tokio::test]
+async fn active_profile_dependencies_replace_base_before_management() {
+    // Compared with Maven 3.9.11 help:effective-pom: profiles replace a whole
+    // dependency declaration; management supplies omitted attributes afterwards.
+    for later_profile in [false, true] {
+        let extra_profile = if later_profile {
+            r#"<profile><id>exclusions</id><activation><activeByDefault>true</activeByDefault></activation>
+<dependencies><dependency><groupId>org.example</groupId><artifactId>driver</artifactId><exclusions><exclusion><groupId>org.example</groupId><artifactId>profile-exclusion</artifactId></exclusion></exclusions></dependency></dependencies></profile>"#
+        } else {
+            ""
+        };
+        let fixture = create_test_project(&format!(
+            r#"
+<project><modelVersion>4.0.0</modelVersion><groupId>org.example</groupId>
+<artifactId>service</artifactId><version>1</version>
+<dependencyManagement><dependencies><dependency><groupId>org.example</groupId><artifactId>driver</artifactId><version>9</version><scope>runtime</scope><optional>false</optional></dependency></dependencies></dependencyManagement>
+<dependencies>
+<dependency><groupId>org.example</groupId><artifactId>driver</artifactId><version>1</version><scope>test</scope><optional>true</optional><exclusions><exclusion><groupId>org.example</groupId><artifactId>base-exclusion</artifactId></exclusion></exclusions></dependency>
+<dependency><groupId>org.example</groupId><artifactId>driver</artifactId><version>1</version><classifier>tests</classifier></dependency>
+</dependencies><profiles>
+<profile><id>version</id><activation><activeByDefault>true</activeByDefault></activation>
+<dependencies><dependency><groupId>org.example</groupId><artifactId>driver</artifactId><version>2</version></dependency></dependencies></profile>
+{extra_profile}
+</profiles></project>"#
+        ));
+        let mut project = MavenParser::parse_project(fixture.path()).await.unwrap();
+        let context = ProfileActivationContext::new(fixture.path().into());
+        let resolver = MavenResolver::new();
+        resolver
+            .activate_profiles(&mut project, &context)
+            .await
+            .unwrap();
+        resolver.finalize_project_dependencies(&mut project);
+        assert_eq!(
+            project.dependencies.len(),
+            2,
+            "same-variant declarations must merge before mediation"
+        );
+        let driver = &project.dependencies[0];
+        assert_eq!(
+            driver.version.as_deref(),
+            Some(if later_profile { "9" } else { "2" })
+        );
+        assert_eq!(
+            driver.scope,
+            hyperion_build::maven::DependencyScope::Runtime
+        );
+        assert!(!driver.optional);
+        assert!(!driver.is_excluded("org.example", "base-exclusion"));
+        assert_eq!(
+            driver.is_excluded("org.example", "profile-exclusion"),
+            later_profile
+        );
+        assert_eq!(project.dependencies[1].classifier.as_deref(), Some("tests"));
+        assert_eq!(project.dependencies[1].version.as_deref(), Some("1"));
+    }
 }

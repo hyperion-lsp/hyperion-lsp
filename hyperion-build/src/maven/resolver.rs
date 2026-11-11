@@ -9,7 +9,7 @@
 //! 3. Reporting missing artifacts without performing network access
 
 use super::activation::{ProfileActivationContext, ProfileEvaluator};
-use super::model::{DependencyScope, MavenDependency, MavenProject};
+use super::model::{DependencyScope, ManagedDependencyKey, MavenDependency, MavenProject};
 use crate::pom::{management_key, PomModelCache, PomRepository};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -275,7 +275,7 @@ impl MavenResolver {
                 self.activate_profiles(&mut parent_project, &activation_context)
                     .await?;
                 Box::pin(self.resolve_bom_imports_inner(&mut parent_project, resolution)).await?;
-                if !self.finalize_project_dependencies(&mut parent_project) {
+                if !self.finalize_dependency_model(&mut parent_project) {
                     return Err(MavenResolverError::InvalidCoordinates(format!(
                         "parent POM {} retains unresolved effective coordinates",
                         parent_pom_path.display()
@@ -300,6 +300,16 @@ impl MavenResolver {
                         .properties
                         .entry(key.clone())
                         .or_insert(value.clone());
+                }
+
+                // Supported inherited content remains useful even when a
+                // parent contains unmodeled constructs. Carry their blockers
+                // into the child instead of discarding all parent profiles
+                // or claiming that the child is complete.
+                for feature in &parent_project.unmodeled_features {
+                    if !project.unmodeled_features.contains(feature) {
+                        project.unmodeled_features.push(feature.clone());
+                    }
                 }
 
                 // Merge parent managed dependencies (child overrides parent)
@@ -471,8 +481,14 @@ impl MavenResolver {
     }
 
     /// Apply properties and dependency management after parent/profile/BOM
-    /// merging. Returns false when any coordinate remains dynamic or versionless.
+    /// merging. Returns false for unresolved coordinates or unmodeled features.
     pub fn finalize_project_dependencies(&self, project: &mut MavenProject) -> bool {
+        self.finalize_dependency_model(project) && project.unmodeled_features.is_empty()
+    }
+
+    /// Finalize the modeled content independently of structural completeness,
+    /// so a parent's supported facts can be inherited along with its blockers.
+    fn finalize_dependency_model(&self, project: &mut MavenProject) -> bool {
         let properties = project.clone();
         let raw_managed_dependencies = std::mem::take(&mut project.managed_dependencies);
         project.group_id = project
@@ -484,11 +500,10 @@ impl MavenResolver {
             .version
             .as_deref()
             .map(|version| properties.resolve_property(version));
-        let mut complete = project.unmodeled_features.is_empty()
-            && project
-                .group_id
-                .as_ref()
-                .is_some_and(|group| !group.contains("${"))
+        let mut complete = project
+            .group_id
+            .as_ref()
+            .is_some_and(|group| !group.contains("${"))
             && !project.artifact_id.contains("${")
             && project
                 .version
@@ -655,23 +670,35 @@ impl MavenResolver {
         let mut activated_dependencies = Vec::new();
         let mut activated_properties = HashMap::new();
 
-        for profile in &project.profiles {
-            if ProfileEvaluator::evaluate(profile, context) {
-                info!("Activating profile: {}", profile.id);
-                activated_profiles.push(profile.id.clone());
+        for profile in ProfileEvaluator::select_active(&project.profiles, context) {
+            info!("Activating profile: {}", profile.id);
+            activated_profiles.push(profile.id.clone());
 
-                // Add profile dependencies
-                activated_dependencies.extend(profile.dependencies.clone());
+            // Add profile dependencies
+            activated_dependencies.extend(profile.dependencies.clone());
 
-                // Merge profile properties (profile properties override base)
-                for (key, value) in &profile.properties {
-                    activated_properties.insert(key.clone(), value.clone());
-                }
+            // Merge profile properties (profile properties override base)
+            for (key, value) in &profile.properties {
+                activated_properties.insert(key.clone(), value.clone());
             }
         }
 
         // Merge activated content into project
-        project.dependencies.extend(activated_dependencies);
+        for dependency in activated_dependencies {
+            let key = ManagedDependencyKey::for_dependency(&dependency);
+            if let Some(existing) = project
+                .dependencies
+                .iter_mut()
+                .find(|existing| ManagedDependencyKey::for_dependency(existing) == key)
+            {
+                // Maven injects a profile dependency as a whole declaration.
+                // Omitted attributes come from management, not the replaced
+                // dependency. Later active profiles dominate earlier ones.
+                *existing = dependency;
+            } else {
+                project.dependencies.push(dependency);
+            }
+        }
 
         for (key, value) in activated_properties {
             project.properties.insert(key, value);

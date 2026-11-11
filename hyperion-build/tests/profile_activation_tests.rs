@@ -29,6 +29,7 @@ fn create_test_profile(id: &str, activation: ProfileActivation) -> MavenProfile 
     MavenProfile {
         id: id.to_string(),
         activation,
+        active_by_default: false,
         dependencies: Vec::new(),
         properties: HashMap::new(),
     }
@@ -283,6 +284,16 @@ fn test_jdk_version_range_within() -> Result<()> {
     assert!(ProfileEvaluator::evaluate(&profile, &ctx));
 
     Ok(())
+}
+
+#[test]
+fn incomplete_jdk_version_ranges_do_not_panic_or_activate() {
+    let mut ctx = create_test_context();
+    ctx.java_version = "17".into();
+    for range in ["[", "(", "[11,", "[11,é", "(é", "[11,21x", "[]", "(17]"] {
+        let profile = create_test_profile("editing", ProfileActivation::ByJDK(range.into()));
+        assert!(!ProfileEvaluator::evaluate(&profile, &ctx), "{range}");
+    }
 }
 
 #[test]

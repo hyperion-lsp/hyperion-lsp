@@ -3,7 +3,7 @@
 
 //! Maven POM parser for extracting dependencies and project information.
 
-use super::model::{DependencyScope, MavenDependency, MavenProject};
+use super::model::{DependencyScope, MavenDependency, MavenProject, ProfileActivation};
 use crate::io::{read_utf8_file_bounded, MAX_BUILD_FILE_BYTES};
 use quick_xml::events::Event;
 use quick_xml::Reader;
@@ -97,7 +97,8 @@ impl MavenParser {
         let mut current_activation_os: Option<(Option<String>, Option<String>, Option<String>)> =
             None; // (name, arch, version)
         let mut current_activation_file: Option<(Option<String>, Option<String>)> = None; // (exists, missing)
-        let mut current_profile_activation_conditions = 0usize;
+        let mut current_profile_activation_conditions = Vec::new();
+        let mut current_profile_activation_supported = true;
 
         loop {
             match reader.read_event_into(&mut buf) {
@@ -110,6 +111,13 @@ impl MavenParser {
                         .checked_sub(2)
                         .and_then(|index| current_path.get(index))
                         .map(String::as_str);
+                    if in_profile_activation && !supported_activation_field(parent_tag, &tag_name) {
+                        current_profile_activation_supported = false;
+                        project.unmodeled_features.push(format!(
+                            "profile activation field {} is not modeled",
+                            current_path.join("/")
+                        ));
+                    }
                     let unmodeled_build_feature = match tag_name.as_str() {
                         "plugins" if parent_tag == Some("build") => Some("build plugins"),
                         "pluginManagement" if parent_tag == Some("build") => {
@@ -176,10 +184,12 @@ impl MavenParser {
                             .unmodeled_features
                             .push("explicit Maven profile selection is not modeled".to_string());
                         in_profile = true;
-                        current_profile_activation_conditions = 0;
+                        current_profile_activation_conditions.clear();
+                        current_profile_activation_supported = true;
                         current_profile = Some(super::model::MavenProfile {
                             id: String::new(),
-                            activation: super::model::ProfileActivation::Always,
+                            activation: ProfileActivation::Never,
+                            active_by_default: false,
                             dependencies: Vec::new(),
                             properties: std::collections::HashMap::new(),
                         });
@@ -200,6 +210,17 @@ impl MavenParser {
                 }
                 Ok(Event::Empty(e)) => {
                     let tag_name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                    if in_profile_activation
+                        && !supported_activation_field(
+                            current_path.last().map(String::as_str),
+                            &tag_name,
+                        )
+                    {
+                        current_profile_activation_supported = false;
+                        project.unmodeled_features.push(format!(
+                            "profile activation field {tag_name} is not modeled"
+                        ));
+                    }
                     if in_parent && tag_name == "relativePath" {
                         // Maven uses an empty relativePath to disable the
                         // conventional ../pom.xml reactor-parent lookup.
@@ -308,8 +329,9 @@ impl MavenParser {
                                             } else if in_profile {
                                                 // Add dependency to current profile
                                                 if let Some(ref mut profile) = current_profile {
-                                                    let mut dep = dep;
-                                                    project.apply_managed_dependency(&mut dep);
+                                                    // Keep omissions until profiles have merged
+                                                    // with base declarations. Management applies
+                                                    // to that effective dependency afterwards.
                                                     debug!(
                                                         "Found profile dependency: {}",
                                                         dep.coordinates()
@@ -380,13 +402,21 @@ impl MavenParser {
                         // Handle profile end tag first (special case to avoid borrow issues)
                         if tag_name == "profile" {
                             in_profile = false;
-                            if current_profile_activation_conditions > 1 {
-                                project.unmodeled_features.push(
-                                    "profile with multiple activation conditions is not modeled"
-                                        .to_string(),
-                                );
-                            }
-                            if let Some(profile) = current_profile.take() {
+                            if let Some(mut profile) = current_profile.take() {
+                                profile.activation = if !current_profile_activation_supported {
+                                    // Unsupported conditions cannot justify applying the profile,
+                                    // including its default flag, to the effective classpath.
+                                    profile.active_by_default = false;
+                                    ProfileActivation::Never
+                                } else {
+                                    match current_profile_activation_conditions.len() {
+                                        0 => ProfileActivation::Never,
+                                        1 => current_profile_activation_conditions.pop().unwrap(),
+                                        _ => ProfileActivation::All(std::mem::take(
+                                            &mut current_profile_activation_conditions,
+                                        )),
+                                    }
+                                };
                                 if !profile.id.is_empty() {
                                     debug!("Found profile: {}", profile.id);
                                     current_profiles.push(profile);
@@ -411,16 +441,22 @@ impl MavenParser {
                                             "value" => prop.1 = Some(current_text.clone()),
                                             "property" => {
                                                 in_profile_activation_property = false;
-                                                current_profile_activation_conditions += 1;
                                                 if let Some((name, value)) =
                                                     current_activation_property.take()
                                                 {
                                                     if !name.is_empty() {
-                                                        profile.activation =
-                                                            super::model::ProfileActivation::ByProperty {
+                                                        current_profile_activation_conditions.push(
+                                                            ProfileActivation::ByProperty {
                                                                 name,
                                                                 value,
-                                                            };
+                                                            },
+                                                        );
+                                                    } else {
+                                                        current_profile_activation_supported =
+                                                            false;
+                                                        project.unmodeled_features.push(
+                                                            "profile property activation has no name".to_string(),
+                                                        );
                                                     }
                                                 }
                                             }
@@ -435,16 +471,23 @@ impl MavenParser {
                                             "version" => os.2 = Some(current_text.clone()),
                                             "os" => {
                                                 in_profile_activation_os = false;
-                                                current_profile_activation_conditions += 1;
                                                 if let Some((name, arch, version)) =
                                                     current_activation_os.take()
                                                 {
-                                                    profile.activation =
-                                                        super::model::ProfileActivation::ByOS {
-                                                            name,
-                                                            arch,
-                                                            version,
-                                                        };
+                                                    current_profile_activation_conditions.push(
+                                                        if name.is_none()
+                                                            && arch.is_none()
+                                                            && version.is_none()
+                                                        {
+                                                            ProfileActivation::Never
+                                                        } else {
+                                                            ProfileActivation::ByOS {
+                                                                name,
+                                                                arch,
+                                                                version,
+                                                            }
+                                                        },
+                                                    );
                                                 }
                                             }
                                             _ => {}
@@ -461,7 +504,6 @@ impl MavenParser {
                                             }
                                             "file" => {
                                                 in_profile_activation_file = false;
-                                                current_profile_activation_conditions += 1;
                                                 if let Some((exists, missing)) =
                                                     current_activation_file.take()
                                                 {
@@ -469,11 +511,18 @@ impl MavenParser {
                                                         exists.map(std::path::PathBuf::from);
                                                     let missing_path =
                                                         missing.map(std::path::PathBuf::from);
-                                                    profile.activation =
-                                                        super::model::ProfileActivation::ByFile {
-                                                            exists: exists_path,
-                                                            missing: missing_path,
-                                                        };
+                                                    current_profile_activation_conditions.push(
+                                                        if exists_path.is_none()
+                                                            && missing_path.is_none()
+                                                        {
+                                                            ProfileActivation::Never
+                                                        } else {
+                                                            ProfileActivation::ByFile {
+                                                                exists: exists_path,
+                                                                missing: missing_path,
+                                                            }
+                                                        },
+                                                    );
                                                 }
                                             }
                                             _ => {}
@@ -482,17 +531,25 @@ impl MavenParser {
                                 } else {
                                     match tag_name.as_str() {
                                         "jdk" => {
-                                            current_profile_activation_conditions += 1;
-                                            profile.activation =
-                                                super::model::ProfileActivation::ByJDK(
-                                                    current_text.clone(),
-                                                );
+                                            current_profile_activation_conditions.push(
+                                                if current_text.is_empty() {
+                                                    ProfileActivation::Never
+                                                } else {
+                                                    ProfileActivation::ByJDK(current_text.clone())
+                                                },
+                                            );
                                         }
                                         "activeByDefault" => {
-                                            project.unmodeled_features.push(
-                                                "profile activeByDefault activation is not modeled"
-                                                    .to_string(),
-                                            );
+                                            profile.active_by_default = current_text == "true";
+                                            if !matches!(
+                                                current_text.as_str(),
+                                                "true" | "false" | ""
+                                            ) {
+                                                current_profile_activation_supported = false;
+                                                project.unmodeled_features.push(
+                                                    "profile activeByDefault flag is not a static boolean".to_string(),
+                                                );
+                                            }
                                         }
                                         "activation" => {
                                             in_profile_activation = false;
@@ -578,6 +635,18 @@ impl MavenParser {
     }
 }
 
+fn supported_activation_field(parent: Option<&str>, field: &str) -> bool {
+    matches!(
+        (parent, field),
+        (
+            Some("activation"),
+            "activeByDefault" | "jdk" | "os" | "property" | "file"
+        ) | (Some("os"), "name" | "arch" | "version")
+            | (Some("property"), "name" | "value")
+            | (Some("file"), "exists" | "missing")
+    )
+}
+
 #[cfg(test)]
 mod completeness_tests {
     use super::*;
@@ -625,10 +694,7 @@ mod completeness_tests {
             .unmodeled_features
             .iter()
             .any(|feature| feature.contains("profile-scoped reactor modules")));
-        assert!(project
-            .unmodeled_features
-            .iter()
-            .any(|feature| feature.contains("activeByDefault")));
+        assert!(project.profiles[0].active_by_default);
         assert!(project.dependencies.is_empty());
     }
 

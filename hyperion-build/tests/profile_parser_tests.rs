@@ -49,7 +49,8 @@ async fn test_parse_simple_profile_with_id() -> Result<()> {
 
     assert_eq!(project.profiles.len(), 1);
     assert_eq!(project.profiles[0].id, "development");
-    assert_eq!(project.profiles[0].activation, ProfileActivation::Always);
+    assert_eq!(project.profiles[0].activation, ProfileActivation::Never);
+    assert!(!project.profiles[0].active_by_default);
 
     Ok(())
 }

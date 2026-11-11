@@ -383,6 +383,10 @@ pub struct MavenProfile {
     /// Activation conditions
     pub activation: ProfileActivation,
 
+    /// Fallback activation when no profile in this POM matches its conditions.
+    #[serde(default)]
+    pub active_by_default: bool,
+
     /// Dependencies specific to this profile
     pub dependencies: Vec<MavenDependency>,
 
@@ -393,7 +397,11 @@ pub struct MavenProfile {
 /// Profile activation conditions
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProfileActivation {
-    /// Always activate (no activation conditions)
+    /// No implicit activation. A POM profile without conditions requires
+    /// explicit selection or `activeByDefault`.
+    Never,
+
+    /// Unconditionally activate a programmatically constructed profile.
     Always,
 
     /// Activate by property existence or value

@@ -168,14 +168,37 @@ fn normalize_os_name(os: &str) -> String {
 pub struct ProfileEvaluator;
 
 impl ProfileEvaluator {
-    /// Evaluate if a profile should be activated based on the context
+    /// Evaluate the implicit conditions of one profile. Use `select_active`
+    /// when applying profiles so `activeByDefault` has its POM-wide semantics.
     pub fn evaluate(profile: &MavenProfile, ctx: &ProfileActivationContext) -> bool {
         Self::evaluate_activation(&profile.activation, ctx)
+    }
+
+    /// Select profiles from one POM. Defaults apply only when none of that
+    /// POM's profiles activates through its conditions, never across parents
+    /// or sibling modules. A default can itself have implicit conditions.
+    pub fn select_active<'a>(
+        profiles: &'a [MavenProfile],
+        ctx: &ProfileActivationContext,
+    ) -> Vec<&'a MavenProfile> {
+        let active: Vec<_> = profiles
+            .iter()
+            .filter(|profile| Self::evaluate(profile, ctx))
+            .collect();
+        if active.is_empty() {
+            profiles
+                .iter()
+                .filter(|profile| profile.active_by_default)
+                .collect()
+        } else {
+            active
+        }
     }
 
     /// Evaluate a specific activation condition
     fn evaluate_activation(activation: &ProfileActivation, ctx: &ProfileActivationContext) -> bool {
         match activation {
+            ProfileActivation::Never => false,
             ProfileActivation::Always => true,
 
             ProfileActivation::ByProperty { name, value } => {
@@ -345,7 +368,13 @@ impl ProfileEvaluator {
         let inclusive_min = range.starts_with('[');
         let inclusive_max = range.ends_with(']');
 
-        let inner = &range[1..range.len() - 1];
+        let Some(inner) = range
+            .strip_prefix('[')
+            .or_else(|| range.strip_prefix('('))
+            .and_then(|inner| inner.strip_suffix(']').or_else(|| inner.strip_suffix(')')))
+        else {
+            return false;
+        };
         let parts: Vec<&str> = inner.split(',').collect();
 
         if parts.len() != 2 {
