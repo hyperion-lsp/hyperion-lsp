@@ -8,6 +8,42 @@ use std::fs;
 use tempfile::TempDir;
 
 #[test]
+fn checkout_location_does_not_change_source_discovery() {
+    let temp = TempDir::new().unwrap();
+    for parent in ["build", "target", "out", "bin", "dist", "node_modules"] {
+        let root = temp.path().join(parent).join("checkout");
+        let source = root.join("src/main/java/example/App.java");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::write(&source, "package example; public class App {}").unwrap();
+        for output in ["build", "target", "out", "bin", "dist", "node_modules"] {
+            let artifact = root.join(output).join("Duplicate.java");
+            fs::create_dir_all(artifact.parent().unwrap()).unwrap();
+            fs::write(artifact, "class Duplicate {}").unwrap();
+        }
+        assert_eq!(
+            WorkspaceScanner::scan_dir(&root).unwrap(),
+            vec![source.clone()]
+        );
+        assert_eq!(
+            WorkspaceScanner::scan_dir_scoped_gitignore(&root).unwrap(),
+            vec![source.clone()]
+        );
+        assert_eq!(
+            ScannerBuilder::new(root.clone()).scan().unwrap(),
+            vec![source.clone()]
+        );
+
+        // Verify downstream consumption too: unopened sources must be available
+        // to cross-file navigation immediately after the workspace is built.
+        let index = hyperion_workspace::WorkspaceIndex::new(root);
+        let stats = index.build().unwrap();
+        assert_eq!(stats.files_indexed, 1);
+        assert!(index.find_symbol("example.App").is_some());
+        assert!(index.find_symbol("Duplicate").is_none());
+    }
+}
+
+#[test]
 fn test_scanner_finds_java_files_in_nested_directories() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();

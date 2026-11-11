@@ -2588,7 +2588,12 @@ impl WorkspaceIndex {
         // Publication may have removed, relocated, or replaced this FileId
         // while disk I/O ran. Cache only bytes proven to belong to the same
         // path/hash identity. A concurrent exact publication wins naturally.
-        let mut inner = self.write_inner();
+        // This read-through cache fill does not publish semantic state. It
+        // must also work for readers without a semantic write transaction,
+        // including workspace-symbol queries after cache restore/eviction.
+        // Hold the index lock across validation and insertion so a writer
+        // cannot replace the authoritative revision between those steps.
+        let mut inner = self.inner.write();
         if inner
             .published_revisions
             .get(&file_id)

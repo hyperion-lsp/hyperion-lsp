@@ -2384,7 +2384,7 @@ mod tests {
         fs::write(&gradle_file, "plugins { id 'java' }").unwrap();
         fs::write(&txt_file, "ignore").unwrap();
 
-        let scan = scan_source_tree(root);
+        let scan = scan_source_tree(root, root);
 
         assert!(scan.complete);
         assert!(scan.files.contains(&java_file));
@@ -2410,7 +2410,7 @@ mod tests {
         }
         fs::write(root.join(".gitignore"), "ignored/\n").unwrap();
 
-        let scan = scan_source_tree(root);
+        let scan = scan_source_tree(root, root);
 
         assert!(scan.complete);
         assert!(scan.files.contains(&visible));
@@ -2418,6 +2418,54 @@ mod tests {
         assert!(!scan.files.contains(&target));
         assert!(!scan.files.contains(&build));
         assert!(!scan.files.contains(&ignored));
+    }
+
+    #[test]
+    fn directory_events_keep_the_workspace_exclusion_boundary() {
+        let temp = TempDir::new().unwrap();
+        let workspace_root = temp.path().join("build/checkout");
+        let workspace_index = Arc::new(WorkspaceIndex::new(workspace_root.clone()));
+        let (mutation_ctx, host) = test_mutation_context(Arc::clone(&workspace_index));
+        for directory in [
+            "src",
+            "build/classes",
+            "target/classes",
+            "bin",
+            "dist",
+            "node_modules",
+        ] {
+            let subtree = workspace_root.join(directory);
+            fs::create_dir_all(&subtree).unwrap();
+            let source_path = subtree.join("EventSource.java");
+            fs::write(&source_path, "class EventSource {}").unwrap();
+            let created =
+                reconcile_directory_create(&mut host.write_now(), &mutation_ctx, &subtree);
+            assert!(created.complete, "{directory}");
+            assert_eq!(
+                created.revisions_changed,
+                usize::from(directory == "src"),
+                "{directory}"
+            );
+            assert_eq!(
+                workspace_index.get_file_id(&source_path).is_some(),
+                directory == "src",
+                "{directory}"
+            );
+        }
+        assert!(workspace_index.find_symbol("EventSource").is_some());
+
+        // Moving real sources into outputs must retire their old index entries
+        // without reintroducing the same declarations under the output path.
+        let from = workspace_root.join("src");
+        let to = workspace_root.join("out/moved");
+        fs::create_dir_all(to.parent().unwrap()).unwrap();
+        fs::rename(&from, &to).unwrap();
+        let renamed = reconcile_directory_rename(&mut host.write_now(), &mutation_ctx, &from, &to);
+        assert!(renamed.complete);
+        assert!(workspace_index.find_symbol("EventSource").is_none());
+        assert!(workspace_index
+            .get_file_id(&to.join("EventSource.java"))
+            .is_none());
     }
 
     #[test]

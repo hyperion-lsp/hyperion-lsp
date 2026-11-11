@@ -1174,9 +1174,10 @@ impl WorkspaceIndex {
         }
     }
 
-    /// From now on (in debug builds) panic when the index is mutated while no
+    /// From now on (in debug builds) panic when authoritative index state is mutated while no
     /// [`ExclusiveIndexWrites`] guard is alive. Called once by the semantic host,
-    /// whose write transaction is the single writer of this index.
+    /// whose write transaction is the single publisher of this index. Exact
+    /// byte-cache refills do not publish state and remain available to readers.
     pub fn require_exclusive_writes(&self) {
         self.exclusive_writes
             .required
@@ -1191,7 +1192,9 @@ impl WorkspaceIndex {
         ExclusiveIndexWrites(Arc::clone(&self.exclusive_writes))
     }
 
-    /// The single choke point for taking the index's write lock.
+    /// Gate authoritative index mutations through the semantic writer.
+    /// Exact byte-cache refills in query.rs take the lock directly: they
+    /// revalidate the publication and do not change any semantic state.
     #[inline]
     pub(super) fn write_inner(&self) -> parking_lot::RwLockWriteGuard<'_, IndexInner> {
         self.assert_exclusive_write();
@@ -1224,6 +1227,11 @@ impl WorkspaceIndex {
 
     pub fn index_phase_snapshot(&self) -> IndexPhaseSnapshot {
         self.index_profile.snapshot()
+    }
+
+    /// Root used by workspace discovery and incremental subtree scans.
+    pub fn root(&self) -> PathBuf {
+        self.inner.read().root.clone()
     }
 
     /// Update the workspace root path

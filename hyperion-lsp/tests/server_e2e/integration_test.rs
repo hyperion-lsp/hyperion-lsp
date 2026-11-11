@@ -425,6 +425,12 @@ impl Drop for LSPTestClient {
         if let Some(thread) = self.stderr_thread.take() {
             let _ = thread.join();
         }
+        if thread::panicking() {
+            eprintln!(
+                "LSP stderr:\n{}",
+                String::from_utf8_lossy(&self.stderr.lock())
+            );
+        }
     }
 }
 
@@ -706,6 +712,76 @@ fn binary_formatting_formats_java_and_declines_unsafe_or_unsupported_input() {
     );
 
     client.shutdown();
+}
+
+#[test]
+fn test_checkout_under_build_has_stable_symbols_across_updates_and_restart() {
+    fn symbols(client: &LSPTestClient) -> Vec<Value> {
+        let id = client.send_request("workspace/symbol", json!({"query": "CheckoutProbe"}));
+        let response = client
+            .wait_for_response(id, INTERACTIVE_RESPONSE_TIMEOUT_MS)
+            .expect("workspace symbols response");
+        assert!(response.get("error").is_none(), "{response}");
+        response["result"].as_array().expect("symbol array").clone()
+    }
+
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("build/generated/checkout");
+    let source_dir = root.join("src/main/java/example");
+    std::fs::create_dir_all(&source_dir).unwrap();
+    let source = source_dir.join("CheckoutProbe.java");
+    std::fs::write(&source, "package example; public class CheckoutProbe {}").unwrap();
+    for output in [
+        "build/classes",
+        "target/classes",
+        "bin",
+        "dist",
+        "node_modules",
+    ] {
+        let dir = root.join(output);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("CheckoutProbeDuplicate.java"),
+            "class CheckoutProbeDuplicate {}",
+        )
+        .unwrap();
+    }
+    let root_uri = tower_lsp::lsp_types::Url::from_directory_path(&root).unwrap();
+    let source_uri = tower_lsp::lsp_types::Url::from_file_path(&source).unwrap();
+    let client = LSPTestClient::new();
+    client.initialize(root_uri.as_str());
+    client.wait_for_initial_indexing();
+    let initial = symbols(&client);
+    assert_eq!(
+        initial.len(),
+        1,
+        "unopened sources must be indexed: {initial:?}"
+    );
+    assert_eq!(initial[0]["location"]["uri"], source_uri.as_str());
+
+    std::fs::write(&source, "package example; class CheckoutProbeUpdated {}").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let current = symbols(&client);
+        if current.len() == 1 && current[0]["name"] == "CheckoutProbeUpdated" {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "watcher did not publish edit: {current:?}"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+    client.shutdown();
+
+    let restarted = LSPTestClient::new();
+    restarted.initialize(root_uri.as_str());
+    restarted.wait_for_initial_indexing();
+    let restored = symbols(&restarted);
+    assert_eq!(restored.len(), 1, "restart changed discovery: {restored:?}");
+    assert_eq!(restored[0]["name"], "CheckoutProbeUpdated");
+    assert_eq!(restored[0]["location"]["uri"], source_uri.as_str());
+    restarted.shutdown();
 }
 
 #[test]

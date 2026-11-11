@@ -105,6 +105,24 @@ impl WorkspaceScanner {
     }
 
     fn scan_dir_with_config(root: &Path, config: ScannerConfig) -> Result<Vec<PathBuf>> {
+        Self::scan_dir_with_boundary(root, root, config)
+    }
+
+    /// Scan a subtree using the enclosing workspace's build-output exclusions.
+    /// Directory event reconciliation must retain this boundary even when the
+    /// event itself points inside an excluded output directory.
+    pub fn scan_dir_with_exclusion_root(
+        root: &Path,
+        exclusion_root: &Path,
+    ) -> Result<Vec<PathBuf>> {
+        Self::scan_dir_with_boundary(root, exclusion_root, ScannerConfig::workspace_default())
+    }
+
+    fn scan_dir_with_boundary(
+        root: &Path,
+        exclusion_root: &Path,
+        config: ScannerConfig,
+    ) -> Result<Vec<PathBuf>> {
         use std::time::Instant;
 
         let start = Instant::now();
@@ -184,7 +202,9 @@ impl WorkspaceScanner {
                 }
 
                 // Filter: skip build directories
-                if config.apply_build_output_exclusions && Self::should_skip(path) {
+                if config.apply_build_output_exclusions
+                    && Self::should_skip(path.strip_prefix(exclusion_root).unwrap_or(path))
+                {
                     debug!("Skipping file: {}", path.display());
                     return WalkState::Continue;
                 }
@@ -249,7 +269,8 @@ impl WorkspaceScanner {
     /// Check if a file should be skipped even if not in .gitignore
     ///
     /// This catches common build artifact and tool-state directories that
-    /// might not be in `.gitignore`.
+    /// might not be in `.gitignore`. Pass a path relative to the workspace
+    /// boundary: ancestor directory names do not describe project outputs.
     pub fn should_skip(path: &Path) -> bool {
         // Compare path components, not rendered separators, so the exclusion
         // remains correct on Windows as well as Unix.

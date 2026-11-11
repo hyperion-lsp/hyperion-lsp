@@ -57,7 +57,7 @@ pub(super) fn reconcile_directory_rename(
     from: &Path,
     to: &Path,
 ) -> DirectoryRenameOutcome {
-    let scan = scan_source_tree(to);
+    let scan = scan_source_tree(to, &ctx.workspace_index.root());
     let (indexed_old_files, truncated) = ctx
         .workspace_index
         .workspace_files_under_bounded(from, MAX_DIRECTORY_RECONCILIATION_ENTRIES);
@@ -183,7 +183,7 @@ pub(super) fn reconcile_directory_create(
     ctx: &SourceMutationContext,
     root: &Path,
 ) -> DirectoryRenameOutcome {
-    let scan = scan_source_tree(root);
+    let scan = scan_source_tree(root, &ctx.workspace_index.root());
     let mut changed_file_ids = HashSet::new();
     let mut dependent_files = HashSet::new();
     let mut revisions_changed = 0;
@@ -286,24 +286,28 @@ fn finish_directory_outcome(
     }
 }
 
-pub(super) fn scan_source_tree(root: &Path) -> SourceTreeScan {
-    let mut files = match hyperion_workspace::scanner::WorkspaceScanner::scan_dir(root) {
-        Ok(files) => files,
-        Err(error) => {
-            warn!(
-                "Directory reconciliation scan of {} was incomplete: {}",
-                root.display(),
-                error
-            );
-            return SourceTreeScan {
-                files: Vec::new(),
-                complete: false,
-                // A failed traversal cannot prove that no Maven/Gradle input
-                // was present. Refreshing is the conservative recovery path.
-                build_files_found: true,
-            };
-        }
-    };
+pub(super) fn scan_source_tree(root: &Path, workspace_root: &Path) -> SourceTreeScan {
+    let mut files =
+        match hyperion_workspace::scanner::WorkspaceScanner::scan_dir_with_exclusion_root(
+            root,
+            workspace_root,
+        ) {
+            Ok(files) => files,
+            Err(error) => {
+                warn!(
+                    "Directory reconciliation scan of {} was incomplete: {}",
+                    root.display(),
+                    error
+                );
+                return SourceTreeScan {
+                    files: Vec::new(),
+                    complete: false,
+                    // A failed traversal cannot prove that no Maven/Gradle input
+                    // was present. Refreshing is the conservative recovery path.
+                    build_files_found: true,
+                };
+            }
+        };
 
     let complete = files.len() <= MAX_DIRECTORY_RECONCILIATION_ENTRIES;
     if !complete {

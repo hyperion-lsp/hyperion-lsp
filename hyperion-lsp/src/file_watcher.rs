@@ -273,16 +273,6 @@ impl FileWatcher {
         self.event_rx.recv().await
     }
 
-    /// Convert a notify Event to our FileChangeEvent enum
-    ///
-    /// This function filters events to only include relevant source files
-    /// and converts them to our simplified event types.
-    ///
-    /// # Returns
-    ///
-    /// Returns every relevant path represented by the notify event. Backends
-    /// are allowed to batch multiple paths into one event; silently taking only
-    /// the first path leaves the index permanently stale.
     /// Whether a client-reported file change is one the server tracks
     /// (sources and build files, outside hidden/build-output directories).
     pub(crate) fn is_relevant_source_path(root: &Path, path: &Path) -> bool {
@@ -293,13 +283,12 @@ impl FileWatcher {
         {
             return false;
         }
-        let is_build_output = relative.components().any(|c| {
-            matches!(
-                c.as_os_str().to_string_lossy().as_ref(),
-                "target" | "build" | "out"
-            )
-        });
-        if is_build_output && !hyperion_workspace::scanner::is_generated_source_path(path) {
+        // Keep live file events aligned with the startup scanner. Generated
+        // sources are discovered separately by the build model, but still need
+        // incremental updates. Both rules apply below the workspace boundary.
+        if hyperion_workspace::scanner::WorkspaceScanner::should_skip(relative)
+            && !hyperion_workspace::scanner::is_generated_source_path(relative)
+        {
             return false;
         }
         hyperion_layout::is_build_input(path)
@@ -321,59 +310,23 @@ impl FileWatcher {
     /// that itself lives under a hidden or `build`/`out`/`target` directory
     /// (`~/.local/...`, `/tmp/.tmpXXXX`, `~/build/project`) must not have
     /// every event discarded.
+    /// Every relevant path in a batched event is preserved.
     fn convert_event_in(event: Event, root: &Path) -> Vec<FileChangeEvent> {
         use notify::event::{CreateKind, ModifyKind, RemoveKind, RenameMode};
         use notify::EventKind;
 
-        fn path_is_ignored(root: &Path, path: &Path) -> bool {
-            // M24 FIX: Ignore symlinks to prevent duplicate indexing
+        fn is_relevant_file(root: &Path, path: &Path) -> bool {
+            // Ignore symlinks to prevent duplicate indexing.
             // Symlinks can cause the same file to be indexed multiple times or
             // create infinite loops if they point to parent directories
             if let Ok(metadata) = std::fs::symlink_metadata(path) {
                 if metadata.is_symlink() {
                     debug!("Ignoring symlink: {}", path.display());
-                    return true;
+                    return false;
                 }
             }
 
-            // Ignore hidden files and directories (e.g., .git, .idea)
-            let relative = path.strip_prefix(root).unwrap_or(path);
-            if relative
-                .components()
-                .any(|c| c.as_os_str().to_string_lossy().starts_with('.'))
-            {
-                return true;
-            }
-
-            // Ignore build output directories except generated-source trees.
-            // Annotation processors commonly write below `build/` or
-            // `target/`; source events there need the same incremental update
-            // path as hand-written source, while classes/resources remain noise.
-            let is_build_output = relative.components().any(|c| {
-                let s = c.as_os_str().to_string_lossy();
-                matches!(s.as_ref(), "target" | "build" | "out" | ".gradle" | ".m2")
-            });
-            if is_build_output && !hyperion_workspace::scanner::is_generated_source_path(path) {
-                return true;
-            }
-
-            false
-        }
-
-        fn is_relevant_file(root: &Path, path: &Path) -> bool {
-            if path_is_ignored(root, path) {
-                return false;
-            }
-
-            if hyperion_layout::is_build_input(path) {
-                return true;
-            }
-
-            path.extension()
-                .and_then(|ext| ext.to_str())
-                .is_some_and(|ext| {
-                    matches!(ext, "java" | "kt" | "kts" | "scala" | "groovy" | "gradle")
-                })
+            FileWatcher::is_relevant_source_path(root, path)
         }
 
         fn is_relevant_directory(root: &Path, path: &Path) -> bool {
@@ -690,6 +643,61 @@ mod tests {
             PathBuf::from("/workspace/generated/project/build/classes/LooksGenerated.java"),
         );
         assert!(FileWatcher::convert_event(misleading_parent).is_empty());
+    }
+
+    #[test]
+    fn client_and_native_file_events_exclude_the_scanners_build_directories() {
+        let root = Path::new("/workspace");
+        for directory in ["target", "build", "out", "bin", "dist", "node_modules"] {
+            let path = root.join(directory).join("copied/App.java");
+            assert!(
+                !FileWatcher::is_relevant_source_path(root, &path),
+                "client file events must exclude {directory}"
+            );
+            for kind in [
+                EventKind::Create(CreateKind::File),
+                EventKind::Modify(notify::event::ModifyKind::Any),
+                EventKind::Remove(notify::event::RemoveKind::File),
+            ] {
+                let event = Event::new(kind).add_path(path.clone());
+                assert!(
+                    FileWatcher::convert_event_in(event, root).is_empty(),
+                    "native {kind:?} file events must exclude {directory}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn generated_source_exemptions_are_relative_to_the_workspace() {
+        let root = Path::new("/home/build/generated/project");
+        for (relative, relevant) in [
+            ("src/main/java/App.java", true),
+            ("build/classes/App.java", false),
+            ("target/classes/App.java", false),
+            ("bin/App.java", false),
+            (".cache/App.java", false),
+            ("build/generated/ksp/main/java/App.java", true),
+            ("target/generated-sources/annotations/App.java", true),
+            ("target/generated-test-sources/annotations/App.java", true),
+        ] {
+            let path = root.join(relative);
+            assert_eq!(
+                FileWatcher::is_relevant_source_path(root, &path),
+                relevant,
+                "client classification of {relative}"
+            );
+            let event = Event::new(EventKind::Create(CreateKind::File)).add_path(path.clone());
+            let changes = FileWatcher::convert_event_in(event, root);
+            if relevant {
+                assert!(
+                    matches!(changes.as_slice(), [FileChangeEvent::Created(created)] if created == &path),
+                    "native classification of {relative}: {changes:?}"
+                );
+            } else {
+                assert!(changes.is_empty(), "native classification of {relative}");
+            }
+        }
     }
 
     #[test]

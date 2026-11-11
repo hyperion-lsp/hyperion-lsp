@@ -13067,6 +13067,59 @@ fn delayed_content_read_cannot_resurrect_a_removed_file() {
 }
 
 #[test]
+fn exact_content_cache_refill_is_safe_without_a_semantic_write_transaction() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("Restored.java");
+    let source = "class Restored {}";
+    std::fs::write(&path, source).unwrap();
+    let index = WorkspaceIndex::new(temp.path().to_path_buf());
+    index.require_exclusive_writes();
+    let revision = {
+        let _writer = index.begin_exclusive_writes();
+        index.index_file_with_source(&path, source).unwrap();
+        let file_id = index.get_file_id(&path).unwrap();
+        index.clear_file_cache();
+        index.write_inner().parse_tree_cache.remove(&file_id);
+        index.current_file_revision(file_id).unwrap()
+    };
+    let workspace_revision = index.inner.read().workspace_revision;
+    let content = index.get_indexed_revision_content(revision).unwrap();
+    assert_eq!(content.content.as_str(), source);
+    assert_eq!(content.revision, revision);
+    assert_eq!(index.inner.read().workspace_revision, workspace_revision);
+    assert_eq!(
+        index
+            .get_indexed_revision_content(revision)
+            .unwrap()
+            .content
+            .as_str(),
+        source
+    );
+    assert_eq!(
+        index.current_file_revision(revision.file_id()),
+        Some(revision)
+    );
+    assert!(index.find_symbol("Restored").is_some());
+
+    // Cache fill still cannot publish changed disk bytes as that revision.
+    {
+        let _writer = index.begin_exclusive_writes();
+        index.clear_file_cache();
+        index
+            .write_inner()
+            .parse_tree_cache
+            .remove(&revision.file_id());
+    }
+    std::fs::write(&path, "class ChangedOnDisk {}").unwrap();
+    assert!(index.get_indexed_revision_content(revision).is_none());
+    assert!(index.find_symbol("ChangedOnDisk").is_none());
+    assert_eq!(
+        index.current_file_revision(revision.file_id()),
+        Some(revision)
+    );
+}
+
+#[test]
 fn delayed_exact_disk_refill_cannot_cross_a_newer_publication() {
     let temp = TempDir::new().unwrap();
     let path = temp.path().join("Revision.kt");
