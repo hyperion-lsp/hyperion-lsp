@@ -428,10 +428,22 @@ pub(crate) fn selected_owner_member_definitions_shared_from_owner(
 ) -> Option<Arc<Vec<ResolvedDefinition>>> {
     const MAX_CACHED_OWNERS: usize = 2048;
     let file_id = owner.location.file_id;
+    // Workspace files publish a revision, external sources (the JDK image, a
+    // dependency archive) a generation. Both are stable for as long as the
+    // source's declarations are, and `file_id` keeps the two id spaces apart.
+    // Leaving external owners unmemoized rescanned every declaration of their
+    // source on each call: for the JDK that is one pass over the whole
+    // standard library per method call on a `String`.
     let revision_id = inner
         .published_revisions
         .get(&file_id)
-        .map(|published| published.id);
+        .map(|published| published.id)
+        .or_else(|| {
+            inner
+                .published_external_source_generations
+                .get(&file_id)
+                .copied()
+        });
     if let Some(revision_id) = revision_id {
         if let Some(entry) = inner.member_definitions_cache.lock().get(owner_fqn) {
             if entry.file_id == file_id
