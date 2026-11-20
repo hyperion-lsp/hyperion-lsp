@@ -223,39 +223,65 @@ impl CurrentUsageCache {
         self.entries.get(key).map(|(usages, _)| Arc::clone(usages))
     }
 
-    fn put(&mut self, key: CurrentUsageCacheKey, usages: Arc<[crate::usage_extractor::Usage]>) {
-        let entry_bytes =
-            usages
-                .iter()
-                .fold(std::mem::size_of_val(usages.as_ref()), |bytes, usage| {
-                    bytes
-                        .saturating_add(usage.fqn.len())
-                        .saturating_add(usage.location.name.len())
-                        .saturating_add(usage.location.fqn.len())
-                        .saturating_add(
-                            usage
-                                .location
-                                .container_name
-                                .as_ref()
-                                .map_or(0, |container| container.len()),
-                        )
-                });
+    /// Retained size of one file's usages, as charged against
+    /// [`CURRENT_USAGE_CACHE_BYTES`]. Linear in the usage count, so callers
+    /// compute it before taking the cache lock.
+    fn entry_bytes(usages: &[crate::usage_extractor::Usage]) -> usize {
+        usages
+            .iter()
+            .fold(std::mem::size_of_val(usages), |bytes, usage| {
+                bytes
+                    .saturating_add(usage.fqn.len())
+                    .saturating_add(usage.location.name.len())
+                    .saturating_add(usage.location.fqn.len())
+                    .saturating_add(
+                        usage
+                            .location
+                            .container_name
+                            .as_ref()
+                            .map_or(0, |container| container.len()),
+                    )
+            })
+    }
+
+    /// Insert `usages`, returning whatever was displaced to stay in budget.
+    ///
+    /// The caller drops the returned entries after releasing the cache lock:
+    /// freeing a file's usages walks thousands of strings, and doing that
+    /// under the lock serialized every worker of a parallel reference scan.
+    #[must_use = "drop the displaced entries after releasing the cache lock"]
+    fn put(
+        &mut self,
+        key: CurrentUsageCacheKey,
+        usages: Arc<[crate::usage_extractor::Usage]>,
+        entry_bytes: usize,
+    ) -> Vec<Arc<[crate::usage_extractor::Usage]>> {
+        let mut displaced = Vec::new();
         if entry_bytes > CURRENT_USAGE_CACHE_BYTES {
-            return;
+            displaced.push(usages);
+            return displaced;
         }
-        if let Some((_, old_bytes)) = self.entries.pop(&key) {
+        if let Some((old_usages, old_bytes)) = self.entries.pop(&key) {
             self.total_bytes = self.total_bytes.saturating_sub(old_bytes);
+            displaced.push(old_usages);
         }
         while self.total_bytes.saturating_add(entry_bytes) > CURRENT_USAGE_CACHE_BYTES {
-            let Some((_, (_, evicted_bytes))) = self.entries.pop_lru() else {
+            let Some((_, (evicted_usages, evicted_bytes))) = self.entries.pop_lru() else {
                 break;
             };
             self.total_bytes = self.total_bytes.saturating_sub(evicted_bytes);
+            displaced.push(evicted_usages);
         }
         self.total_bytes = self.total_bytes.saturating_add(entry_bytes);
-        if let Some((_, replaced_bytes)) = self.entries.put(key, (usages, entry_bytes)) {
-            self.total_bytes = self.total_bytes.saturating_sub(replaced_bytes);
+        // `push` rather than `put`: the key was popped above, so the only
+        // entry this can return is one displaced by the entry-count capacity.
+        if let Some((_, (evicted_usages, evicted_bytes))) =
+            self.entries.push(key, (usages, entry_bytes))
+        {
+            self.total_bytes = self.total_bytes.saturating_sub(evicted_bytes);
+            displaced.push(evicted_usages);
         }
+        displaced
     }
 }
 
@@ -886,6 +912,13 @@ impl WorkspaceIndex {
     #[must_use]
     pub fn has_source_scope(&self) -> bool {
         self.source_scope.is_some()
+    }
+
+    /// The classpath this view resolves through, if it is a scoped view. Two
+    /// views of one index with equal scopes resolve every name identically.
+    #[must_use]
+    pub fn source_scope(&self) -> Option<&SourceScope> {
+        self.source_scope.as_ref()
     }
 
     /// Publication proof to retain with a result derived from this view.

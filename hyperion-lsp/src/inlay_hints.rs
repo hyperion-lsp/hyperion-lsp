@@ -19,14 +19,27 @@ use tower_lsp::lsp_types::{InlayHint, InlayHintKind, InlayHintLabel, Range, Url}
 use tracing::debug;
 
 use crate::navigation::argument_inference::{
-    infer_argument_types, infer_expression_type_for_navigation, Confidence, InferredType,
+    infer_argument_types_with_resolver, infer_expression_type_with_resolver, Confidence,
+    InferredType, ResolverSource,
 };
 use crate::navigation::overload_resolver::{
     receiver_owner_for_lookup, resolve_overload_with_receiver, OverloadMatch,
 };
 use crate::navigation::NavigationProvider;
-use crate::position_utils::{offset_to_position, position_to_offset};
+use crate::position_utils::LineIndex;
 use crate::semantic_host::ReadTxn;
+
+/// A document's text with its line index, built once per request.
+struct SourceLines<'a> {
+    text: &'a str,
+    lines: LineIndex,
+}
+
+impl SourceLines<'_> {
+    fn position(&self, offset: usize) -> tower_lsp::lsp_types::Position {
+        self.lines.offset_to_position(self.text, offset)
+    }
+}
 
 /// Provides inlay hint functionality
 pub struct InlayHintsProvider<'txn> {
@@ -72,11 +85,15 @@ impl<'txn> InlayHintsProvider<'txn> {
 
         let mut hints = Vec::new();
 
-        // Convert range to offsets
-        let start_offset: usize = position_to_offset(source_text, range.start)
-            .map_err(|e| format!("Invalid start position: {e}"))?;
-        let end_offset: usize = position_to_offset(source_text, range.end)
-            .map_err(|e| format!("Invalid end position: {e}"))?;
+        // One line index for the request: every hint needs a position, and
+        // rebuilding the index per hint is a pass over the file each time.
+        // The range is a window, not a location, so it is clamped to the
+        // document instead of failing the request (see `LineIndex`).
+        let source = &SourceLines {
+            text: source_text,
+            lines: LineIndex::new(source_text),
+        };
+        let (start_offset, end_offset) = source.lines.clamped_range_to_offsets(source_text, range);
 
         // Build resolver ONCE for the entire file and reuse it for all hints
         // This is a critical optimization: building a resolver walks the entire AST
@@ -111,7 +128,7 @@ impl<'txn> InlayHintsProvider<'txn> {
             match node.kind() {
                 SyntaxKind::LOCAL_VAR_DECL => {
                     // Check for var declarations - uses resolver_builder for type inference
-                    if let Some(hint) = self.var_type_hint(&node, &resolver_builder, source_text) {
+                    if let Some(hint) = self.var_type_hint(&node, &resolver_builder, source) {
                         hints.push(hint);
                     }
                 }
@@ -131,7 +148,7 @@ impl<'txn> InlayHintsProvider<'txn> {
                         &root,
                         file_id,
                         &mut resolver,
-                        source_text,
+                        source,
                         source_uri.as_ref(),
                     ) {
                         hints.extend(method_hints);
@@ -150,7 +167,7 @@ impl<'txn> InlayHintsProvider<'txn> {
         &self,
         node: &SyntaxNode,
         resolver_builder: &hyperion_semantics::resolver::ResolverBuilder,
-        source_text: &str,
+        source: &SourceLines<'_>,
     ) -> Option<InlayHint> {
         // Check if this is a var declaration
         let has_var = node.descendants_with_tokens().any(|child| {
@@ -191,7 +208,7 @@ impl<'txn> InlayHintsProvider<'txn> {
             None
         })?;
 
-        let position = offset_to_position(source_text, var_name_offset.into());
+        let position = source.position(var_name_offset.into());
 
         Some(InlayHint {
             position,
@@ -212,7 +229,7 @@ impl<'txn> InlayHintsProvider<'txn> {
         syntax_root: &SyntaxNode,
         file_id: FileId,
         resolver: &mut hyperion_semantics::resolver::SymbolResolver,
-        source_text: &str,
+        source: &SourceLines<'_>,
         source_uri: Option<&Url>,
     ) -> Option<Vec<InlayHint>> {
         // METHOD_CALL_EXPR contains: [receiver, DOT, IDENT("method"), ARG_LIST]
@@ -298,7 +315,7 @@ impl<'txn> InlayHintsProvider<'txn> {
             arguments.len(),
             &arguments,
             resolver,
-            source_text,
+            source,
             source_uri,
         )?;
 
@@ -315,7 +332,7 @@ impl<'txn> InlayHintsProvider<'txn> {
             if let Some(param_name) = parameter_names.get(i) {
                 // Position hint at the start of the argument expression
                 let arg_start = arg.text_range().start();
-                let position = offset_to_position(source_text, arg_start.into());
+                let position = source.position(arg_start.into());
 
                 debug!(
                     "Adding hint '{}:' at position {:?} for arg #{} (offset {:?})",
@@ -352,19 +369,20 @@ impl<'txn> InlayHintsProvider<'txn> {
         arg_count: usize,
         arguments: &[SyntaxNode],
         resolver: &mut hyperion_semantics::resolver::SymbolResolver,
-        source_text: &str,
+        source: &SourceLines<'_>,
         source_uri: Option<&Url>,
     ) -> Option<Vec<String>> {
         let arg_types: Vec<InferredType> = arguments
             .iter()
             .map(|arg| {
                 let offset: u32 = arg.text_range().start().into();
-                infer_expression_type_for_navigation(
+                infer_expression_type_with_resolver(
                     arg,
                     file_id,
                     &self.workspace_index,
                     syntax_root,
                     offset,
+                    ResolverSource::Shared(resolver),
                 )
             })
             .collect();
@@ -377,8 +395,12 @@ impl<'txn> InlayHintsProvider<'txn> {
             method_name, receiver_type
         );
 
-        if let Some(ref receiver_type) = receiver_type {
-            let class_fqn = self.type_to_fqn(receiver_type)?;
+        // A receiver whose type has no class name (unknown, a type variable)
+        // cannot be looked up by owner; navigation below may still bind it.
+        let receiver_class = receiver_type
+            .as_ref()
+            .and_then(|receiver_type| Some((receiver_type, self.type_to_fqn(receiver_type)?)));
+        if let Some((receiver_type, class_fqn)) = receiver_class {
             debug!(
                 "Looking up method in workspace: {}.{}({} args)",
                 class_fqn, method_name, arg_count
@@ -392,8 +414,11 @@ impl<'txn> InlayHintsProvider<'txn> {
                 arg_count,
                 &arg_types,
             ) {
-                debug!("✓ Found workspace method parameters: {:?}", param_names);
-                return Some(param_names);
+                if !parameter_names_are_synthetic(&param_names) {
+                    debug!("✓ Found workspace method parameters: {:?}", param_names);
+                    return Some(param_names);
+                }
+                debug!("✗ {class_fqn}.{method_name} was compiled without parameter names");
             }
             if self.method_projection_unavailable(&class_fqn, receiver_type, method_name) {
                 debug!(
@@ -416,19 +441,20 @@ impl<'txn> InlayHintsProvider<'txn> {
         // receiver-relative path above remains allocation-light.
         if let Some(uri) = source_uri {
             let name_range = method_name_range_from_call(method_call_node)?;
-            let position = offset_to_position(source_text, name_range.start().into());
+            let position = source.position(name_range.start().into());
             if let Ok(Some(target)) = self
                 .navigation_provider
                 .resolve_workspace_target_at_position(
                     file_id,
                     position,
-                    source_text,
+                    source.text,
                     uri,
                     Some(DeclarationNamespace::Callable),
                 )
             {
                 let names =
-                    Self::parameter_names_for_call(&target.definition.symbol.parameters, arg_count);
+                    Self::parameter_names_for_call(&target.definition.symbol.parameters, arg_count)
+                        .filter(|names| !parameter_names_are_synthetic(names));
                 if self
                     .navigation_provider
                     .workspace_target_is_current(&target)
@@ -472,6 +498,18 @@ impl<'txn> InlayHintsProvider<'txn> {
         // `factory.choose(1)` call as its first expression child. Looking among the
         // parent's siblings misses that receiver and makes the global name fallback
         // accidentally responsible for ordinary calls.
+        //
+        // `label(x)` is `[NAME_EXPR(label), ARG_LIST]`: its only expression
+        // child is the method name, not a receiver. Resolving that name as a
+        // variable yielded an unknown "receiver type", which ended the lookup
+        // before the navigation fallback that handles unqualified calls, so
+        // calls to a class's own methods got no hints at all.
+        let is_qualified = method_call_node
+            .children_with_tokens()
+            .any(|child| child.kind() == SyntaxKind::DOT);
+        if !is_qualified {
+            return None;
+        }
         let receiver = method_call_node.children().find(|node| {
             matches!(
                 node.kind(),
@@ -518,12 +556,13 @@ impl<'txn> InlayHintsProvider<'txn> {
                             .children()
                             .find(|child| child.kind() == SyntaxKind::ARG_LIST)?;
                         let call_offset = receiver.text_range().start().into();
-                        let arg_types = infer_argument_types(
+                        let arg_types = infer_argument_types_with_resolver(
                             &arg_list,
                             file_id,
                             &self.workspace_index,
                             syntax_root,
                             call_offset,
+                            ResolverSource::Shared(resolver),
                         );
 
                         // Resolve the inner call with the same canonical Java conversion
@@ -1095,6 +1134,18 @@ fn type_to_string(typ: &hyperion_semantics::symbol::Type) -> String {
 /// With nested expression trees, METHOD_CALL_EXPR contains:
 ///   [receiver, DOT, IDENT("method"), ARG_LIST]  — for `receiver.method()`
 ///   [NAME_EXPR("method"), ARG_LIST]              — for `method()`
+/// Whether `names` are the `arg0`, `arg1`, ... the class-file indexer invents
+/// for a method compiled without parameter names (most of the JDK). They say
+/// nothing a reader cannot see, so no hint is better than `arg0:`.
+fn parameter_names_are_synthetic(names: &[String]) -> bool {
+    !names.is_empty()
+        && names.iter().all(|name| {
+            name.strip_prefix("arg").is_some_and(|index| {
+                !index.is_empty() && index.bytes().all(|byte| byte.is_ascii_digit())
+            })
+        })
+}
+
 fn extract_method_name_from_call(node: &SyntaxNode) -> Option<String> {
     method_name_token_from_call(node).map(|token| token.text().to_string())
 }
@@ -1204,5 +1255,28 @@ mod tests {
                 "values".to_string(),
             ])
         );
+    }
+
+    fn names(names: &[&str]) -> Vec<String> {
+        names.iter().map(ToString::to_string).collect()
+    }
+
+    #[test]
+    fn indexer_placeholder_names_are_synthetic() {
+        assert!(parameter_names_are_synthetic(&names(&["arg0"])));
+        assert!(parameter_names_are_synthetic(&names(&["arg0", "arg1"])));
+        // A variadic call repeats the last declared name.
+        assert!(parameter_names_are_synthetic(&names(&[
+            "arg0", "arg1", "arg1"
+        ])));
+    }
+
+    #[test]
+    fn declared_names_are_not_synthetic() {
+        assert!(!parameter_names_are_synthetic(&names(&[])));
+        assert!(!parameter_names_are_synthetic(&names(&["arg"])));
+        assert!(!parameter_names_are_synthetic(&names(&["args"])));
+        assert!(!parameter_names_are_synthetic(&names(&["arg0", "index"])));
+        assert!(!parameter_names_are_synthetic(&names(&["argument1"])));
     }
 }

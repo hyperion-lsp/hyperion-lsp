@@ -30,8 +30,22 @@ struct CurrentUsageScanSnapshot {
     inputs: Vec<CurrentUsageScanInput>,
     targets: Vec<CurrentUsageTarget>,
     strict_lexical_audit: bool,
+    unresolved_overloads: UnresolvedOverloads,
     resource_root: Option<PathBuf>,
     ignored_identifier_ranges: Vec<(FileRevisionToken, crate::TextRange)>,
+}
+
+/// What a scan does with a call that names the target's method but whose
+/// arguments do not say which of several applicable overloads it invokes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UnresolvedOverloads {
+    /// Fail the query. An edit must never be planned from a usage set that
+    /// may be missing a call or may contain a sibling overload's call.
+    Reject,
+    /// Report the call. A reader looking for references is better served by
+    /// a possible reference than by an empty list: one such call anywhere in
+    /// the workspace otherwise hides every reference to the method.
+    Include,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -46,6 +60,7 @@ struct CurrentUsageQuery<'a> {
     targets: CurrentUsageQueryTargets<'a>,
     expected_workspace_revision: Option<WorkspaceRevision>,
     lexical_audit: Option<&'a [(FileRevisionToken, crate::TextRange)]>,
+    unresolved_overloads: UnresolvedOverloads,
 }
 
 impl<'a> CurrentUsageQuery<'a> {
@@ -54,6 +69,7 @@ impl<'a> CurrentUsageQuery<'a> {
             targets: CurrentUsageQueryTargets::Fqns(fqns),
             expected_workspace_revision: None,
             lexical_audit: None,
+            unresolved_overloads: UnresolvedOverloads::Reject,
         }
     }
 
@@ -62,6 +78,7 @@ impl<'a> CurrentUsageQuery<'a> {
             targets: CurrentUsageQueryTargets::Typed(targets),
             expected_workspace_revision: None,
             lexical_audit: None,
+            unresolved_overloads: UnresolvedOverloads::Reject,
         }
     }
 
@@ -70,6 +87,7 @@ impl<'a> CurrentUsageQuery<'a> {
             targets: CurrentUsageQueryTargets::MethodFamily(fqns),
             expected_workspace_revision: None,
             lexical_audit: None,
+            unresolved_overloads: UnresolvedOverloads::Reject,
         }
     }
 
@@ -83,6 +101,11 @@ impl<'a> CurrentUsageQuery<'a> {
         ignored_identifier_ranges: &'a [(FileRevisionToken, crate::TextRange)],
     ) -> Self {
         self.lexical_audit = Some(ignored_identifier_ranges);
+        self
+    }
+
+    fn including_unresolved_overloads(mut self) -> Self {
+        self.unresolved_overloads = UnresolvedOverloads::Include;
         self
     }
 
@@ -194,30 +217,38 @@ impl CurrentUsageTarget {
                 {
                     return CurrentUsageMatch::AmbiguousMethod;
                 }
-                let unique_is_target = if usage_fqn == descriptorless.as_ref() {
-                    unique_overload_is_target(overloads.iter(), &self.fqn)
-                } else {
-                    let Some(descriptor) =
-                        usage_fqn
-                            .strip_prefix(descriptorless.as_ref())
-                            .filter(|descriptor| {
-                                descriptor.starts_with('(') && descriptor.contains('_')
-                            })
-                    else {
-                        return CurrentUsageMatch::No;
+                if usage_fqn == descriptorless.as_ref() {
+                    return if unique_overload_is_target(overloads.iter(), &self.fqn) {
+                        CurrentUsageMatch::Exact
+                    } else {
+                        CurrentUsageMatch::AmbiguousMethod
                     };
-                    let Some(arity) = descriptor_arity(descriptor) else {
-                        return CurrentUsageMatch::AmbiguousMethod;
-                    };
-                    unique_overload_is_target(
-                        overloads
-                            .iter()
-                            .filter(|overload| overload.accepts_arity(arity)),
-                        &self.fqn,
-                    )
+                }
+                let Some(descriptor) = usage_fqn
+                    .strip_prefix(descriptorless.as_ref())
+                    .filter(|descriptor| descriptor.starts_with('(') && descriptor.contains('_'))
+                else {
+                    return CurrentUsageMatch::No;
                 };
-                if unique_is_target {
-                    CurrentUsageMatch::Exact
+                let Some(arity) = descriptor_arity(descriptor) else {
+                    return CurrentUsageMatch::AmbiguousMethod;
+                };
+                let is_target = |overload: &&CallableOverload| overload.fqn == self.fqn;
+                let mut applicable = overloads
+                    .iter()
+                    .filter(|overload| overload.accepts_arity(arity));
+                if applicable.clone().any(|overload| is_target(&overload)) {
+                    if applicable.next().is_some() && applicable.next().is_none() {
+                        CurrentUsageMatch::Exact
+                    } else {
+                        CurrentUsageMatch::AmbiguousMethod
+                    }
+                } else if overloads.iter().any(|overload| is_target(&overload)) {
+                    // The target cannot take this many arguments, so the call
+                    // binds to a sibling, whichever one that is. Calling it
+                    // ambiguous let a single `pick(null, 1)` fail every query
+                    // for `pick(String)`.
+                    CurrentUsageMatch::No
                 } else {
                     CurrentUsageMatch::AmbiguousMethod
                 }
@@ -361,6 +392,28 @@ impl WorkspaceIndex {
         self.find_current_usages_for_targets_inner(
             CurrentUsageQuery::for_typed_targets(targets)
                 .at_workspace_revision(expected_workspace_revision),
+            is_cancelled,
+        )
+    }
+
+    /// [`Self::find_current_usages_for_symbol_targets`] for a reader rather
+    /// than an edit: find-references and call hierarchy.
+    ///
+    /// The only difference is a call that names a target's method without
+    /// determining the overload (an argument's type could not be inferred and
+    /// several overloads take that many arguments). The exact query fails on
+    /// the first one, which is right for a refactoring and leaves a reader
+    /// with an empty list. This query reports such calls as usages.
+    pub fn find_current_usages_for_navigation(
+        &self,
+        targets: &[crate::SymbolTarget],
+        expected_workspace_revision: Option<WorkspaceRevision>,
+        is_cancelled: impl Fn() -> bool + Sync,
+    ) -> std::result::Result<CurrentUsageLocations, CurrentUsageQueryError> {
+        self.find_current_usages_for_targets_inner(
+            CurrentUsageQuery::for_typed_targets(targets)
+                .at_workspace_revision(expected_workspace_revision)
+                .including_unresolved_overloads(),
             is_cancelled,
         )
     }
@@ -705,6 +758,7 @@ impl WorkspaceIndex {
             inputs,
             targets,
             strict_lexical_audit,
+            unresolved_overloads: query.unresolved_overloads,
             resource_root: strict_lexical_audit.then(|| inner.root.clone()),
             ignored_identifier_ranges: query.ignored_identifier_ranges().to_vec(),
         })
@@ -985,13 +1039,16 @@ impl WorkspaceIndex {
             match classification {
                 CurrentUsageMatch::No => continue,
                 CurrentUsageMatch::Exact => {}
-                CurrentUsageMatch::AmbiguousMethod => {
-                    return Err(CurrentUsageQueryError::Unavailable(format!(
-                        "{} contains an overload-ambiguous usage of {}",
-                        input.file_path.display(),
-                        usage.fqn
-                    )));
-                }
+                CurrentUsageMatch::AmbiguousMethod => match snapshot.unresolved_overloads {
+                    UnresolvedOverloads::Include => {}
+                    UnresolvedOverloads::Reject => {
+                        return Err(CurrentUsageQueryError::Unavailable(format!(
+                            "{} contains an overload-ambiguous usage of {}",
+                            input.file_path.display(),
+                            usage.fqn
+                        )));
+                    }
+                },
             }
             let mut location = usage.location.clone();
             if location.file_id != input.revision.file_id()
@@ -1033,9 +1090,12 @@ impl WorkspaceIndex {
         }
         let usages: Arc<[_]> = self.extract_current_usages_uncached(input, indexed)?.into();
         if self.current_workspace_revision() == workspace_revision {
-            self.current_usage_cache
-                .lock()
-                .put(key, Arc::clone(&usages));
+            let entry_bytes = super::CurrentUsageCache::entry_bytes(&usages);
+            let displaced =
+                self.current_usage_cache
+                    .lock()
+                    .put(key, Arc::clone(&usages), entry_bytes);
+            drop(displaced);
         }
         Ok(usages)
     }

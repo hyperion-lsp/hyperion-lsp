@@ -61,6 +61,17 @@ impl NavigationRequest {
     }
 }
 
+/// LSP `RequestFailed`: the request was valid and could not be answered now.
+/// Editors show the message instead of an empty result.
+fn busy_indexing_error() -> tower_lsp::jsonrpc::Error {
+    const REQUEST_FAILED: i64 = -32803;
+    tower_lsp::jsonrpc::Error {
+        code: tower_lsp::jsonrpc::ErrorCode::ServerError(REQUEST_FAILED),
+        message: "Hyperion is still indexing the workspace; try again in a moment".into(),
+        data: None,
+    }
+}
+
 impl Backend {
     fn capture_navigation_request(
         &self,
@@ -207,7 +218,9 @@ impl Backend {
         }
 
         let Ok(txn) = self.workspace.host.read_interactive().await else {
-            return Ok(None);
+            // An empty answer reads as "this symbol has no references", which
+            // is false: the index was busy and nothing was searched.
+            return Err(busy_indexing_error());
         };
         cancellation.check()?;
 

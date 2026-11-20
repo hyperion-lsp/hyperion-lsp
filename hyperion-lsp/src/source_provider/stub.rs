@@ -31,13 +31,78 @@ const MAX_NESTED_CLASSES: usize = 400;
 const MAX_ARCHIVE_BYTES: u64 = 700 * 1024 * 1024;
 /// Rendered stubs kept for repeated navigation to the same type.
 const MAX_CACHED_STUBS: usize = 128;
+/// Declaration paths remembered as belonging to a cached stub.
+const MAX_CACHED_OWNERS: usize = 8192;
 const JMOD_HEADER_BYTES: u64 = 4;
 
-type StubCache = Mutex<HashMap<(PathBuf, String), Arc<SourceFile>>>;
+#[derive(Default)]
+struct StubCache {
+    /// (archive, binary name of a top-level type) -> its rendered stub.
+    stubs: HashMap<(PathBuf, String), Arc<SourceFile>>,
+    /// (archive, dotted path of a type or member) -> binary name of the
+    /// top-level type that declares it, as [`find_top_level_entry`] found it.
+    ///
+    /// Finding it means opening the archive, and opening `java.base.jmod`
+    /// parses a central directory of several thousand entries. Requests that
+    /// resolve many calls into one library (inlay hints) spent most of their
+    /// time doing that again for every call.
+    owners: HashMap<(PathBuf, String), String>,
+    /// Size and modification time of each archive when its entries above were
+    /// read. An archive replaced in place (a JDK or dependency upgrade) must
+    /// not keep serving the stubs of the classes it used to contain.
+    stamps: HashMap<PathBuf, ArchiveStamp>,
+}
 
-fn cache() -> &'static StubCache {
-    static CACHE: OnceLock<StubCache> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ArchiveStamp {
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+}
+
+impl ArchiveStamp {
+    fn of(archive_path: &Path) -> Option<Self> {
+        let metadata = std::fs::metadata(archive_path).ok()?;
+        Some(Self {
+            len: metadata.len(),
+            modified: metadata.modified().ok(),
+        })
+    }
+}
+
+impl StubCache {
+    /// Forget everything read from `archive_path` unless it is still the
+    /// file `stamp` describes.
+    fn retain_current(&mut self, archive_path: &Path, stamp: ArchiveStamp) {
+        if self.stamps.get(archive_path) == Some(&stamp) {
+            return;
+        }
+        self.stubs.retain(|(archive, _), _| archive != archive_path);
+        self.owners
+            .retain(|(archive, _), _| archive != archive_path);
+        self.stamps.insert(archive_path.to_path_buf(), stamp);
+    }
+}
+
+fn cache() -> &'static Mutex<StubCache> {
+    static CACHE: OnceLock<Mutex<StubCache>> = OnceLock::new();
+    CACHE.get_or_init(Mutex::default)
+}
+
+/// `fqn` without a method's parameter list.
+fn type_path(fqn: &str) -> &str {
+    fqn.split_once('(').map_or(fqn, |(before, _)| before)
+}
+
+fn cached_stub(archive_path: &Path, stamp: ArchiveStamp, fqn: &str) -> Option<Arc<SourceFile>> {
+    let mut cache = cache().lock();
+    cache.retain_current(archive_path, stamp);
+    let owner = cache
+        .owners
+        .get(&(archive_path.to_path_buf(), type_path(fqn).to_owned()))?;
+    cache
+        .stubs
+        .get(&(archive_path.to_path_buf(), owner.clone()))
+        .cloned()
 }
 
 /// Serve a stub for `fqn` (a type, or a member of one) declared in the class
@@ -47,20 +112,32 @@ pub(crate) fn stub_source_content(
     archive_path: &Path,
     fqn: &str,
 ) -> Option<SourceContent> {
-    let mut archive = open_archive(archive_path)?;
-    let (top_entry, top_binary_name) = find_top_level_entry(&mut archive, fqn)?;
-    let key = (archive_path.to_path_buf(), top_binary_name.clone());
-    let cached = cache().lock().get(&key).cloned();
-    let source = if let Some(cached) = cached {
+    let stamp = ArchiveStamp::of(archive_path)?;
+    let source = if let Some(cached) = cached_stub(archive_path, stamp, fqn) {
         cached
     } else {
-        let stub = render(&mut archive, &top_entry, &top_binary_name)?;
-        let source = Arc::new(SourceFile::new(Arc::from(stub)));
+        let mut archive = open_archive(archive_path)?;
+        let (top_entry, top_binary_name) = find_top_level_entry(&mut archive, fqn)?;
+        let key = (archive_path.to_path_buf(), top_binary_name.clone());
+        let cached = cache().lock().stubs.get(&key).cloned();
+        let source = if let Some(cached) = cached {
+            cached
+        } else {
+            let stub = render(&mut archive, &top_entry, &top_binary_name)?;
+            Arc::new(SourceFile::new(Arc::from(stub)))
+        };
         let mut cache = cache().lock();
-        if cache.len() >= MAX_CACHED_STUBS {
-            cache.clear();
+        if cache.stubs.len() >= MAX_CACHED_STUBS || cache.owners.len() >= MAX_CACHED_OWNERS {
+            cache.stubs.clear();
+            cache.owners.clear();
+            cache.stamps.clear();
         }
-        cache.insert(key, Arc::clone(&source));
+        cache.retain_current(archive_path, stamp);
+        cache.stubs.insert(key, Arc::clone(&source));
+        cache.owners.insert(
+            (archive_path.to_path_buf(), type_path(fqn).to_owned()),
+            top_binary_name,
+        );
         source
     };
     let temp_file = store
@@ -132,8 +209,7 @@ fn open_archive(path: &Path) -> Option<ClassArchive> {
 /// parameter suffixes off until an entry exists (`java.util.Map.Entry.getKey()`
 /// -> `java/util/Map.class`).
 fn find_top_level_entry(archive: &mut ClassArchive, fqn: &str) -> Option<(String, String)> {
-    let type_path = fqn.split_once('(').map_or(fqn, |(before, _)| before);
-    let mut candidate = type_path;
+    let mut candidate = type_path(fqn);
     for _ in 0..12 {
         let binary_name = candidate.replace('.', "/");
         let entry = format!("{}{binary_name}.class", archive.prefix);
@@ -201,6 +277,40 @@ mod tests {
         let mut file = File::create(path).unwrap();
         file.write_all(prefix_header).unwrap();
         file.write_all(&data).unwrap();
+    }
+
+    #[test]
+    fn a_replaced_archive_forgets_only_its_own_cached_entries() {
+        let stamp = |len| ArchiveStamp {
+            len,
+            modified: None,
+        };
+        let stub = || Arc::new(SourceFile::new(Arc::from("class Stub {}")));
+        let (jdk, library) = (
+            PathBuf::from("/jdk/java.base.jmod"),
+            PathBuf::from("/lib.jar"),
+        );
+        let mut cache = StubCache::default();
+        for archive in [&jdk, &library] {
+            cache.retain_current(archive, stamp(1));
+            cache
+                .stubs
+                .insert((archive.clone(), "p/Owner".to_owned()), stub());
+            cache.owners.insert(
+                (archive.clone(), "p.Owner.member".to_owned()),
+                "p/Owner".to_owned(),
+            );
+        }
+
+        // Same file as before: nothing is dropped.
+        cache.retain_current(&jdk, stamp(1));
+        assert_eq!((cache.stubs.len(), cache.owners.len()), (2, 2));
+
+        // The JDK image was replaced in place; the library was not.
+        cache.retain_current(&jdk, stamp(2));
+        assert!(cache.stubs.keys().all(|(archive, _)| archive == &library));
+        assert!(cache.owners.keys().all(|(archive, _)| archive == &library));
+        assert_eq!((cache.stubs.len(), cache.owners.len()), (1, 1));
     }
 
     #[test]

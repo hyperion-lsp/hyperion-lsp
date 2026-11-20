@@ -340,7 +340,7 @@ impl<'txn> CallHierarchyProvider<'txn> {
         }
         let usages = self
             .workspace_index
-            .find_current_usages_for_symbol_targets(
+            .find_current_usages_for_navigation(
                 &targets,
                 Some(target.provenance.workspace_revision),
                 || false,

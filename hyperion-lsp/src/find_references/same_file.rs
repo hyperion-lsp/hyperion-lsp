@@ -111,10 +111,7 @@ impl NavigationProvider<'_> {
 
             let range = token.text_range();
             if let Some(expected_kind) = query.expected_kind {
-                let Some(parent) = token.parent() else {
-                    continue;
-                };
-                let observed_kind = Self::expected_symbol_kind_from_context(&parent);
+                let observed_kind = Self::expected_symbol_kind_from_context(token);
                 if !Self::reference_kind_matches_expected(
                     expected_kind,
                     observed_kind,

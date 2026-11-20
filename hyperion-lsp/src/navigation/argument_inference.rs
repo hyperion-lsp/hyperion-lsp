@@ -32,8 +32,38 @@ pub struct InferenceContext<'a> {
     pub syntax_root: &'a SyntaxNode<JavaLanguage>,
     pub offset: u32,
     pub file_sem: Option<&'a FileSemantics>,
+    resolver_source: ResolverSource<'a>,
     resolver: OnceCell<SymbolResolver>,
     engine: OnceCell<TypeInferenceEngine>,
+}
+
+/// Where an [`InferenceContext`] gets its file-wide symbol resolver.
+///
+/// Building one walks the whole syntax tree. A caller that infers types at
+/// many call sites of one file (inlay hints resolve every call) must not pay
+/// that walk per call site, so it supplies the resolver it already has.
+#[derive(Clone, Copy)]
+pub(crate) enum ResolverSource<'a> {
+    /// Build one from `syntax_root` on first use.
+    Build,
+    /// Borrow the caller's, built for `syntax_root` with
+    /// [`ResolverBuilder::with_workspace`].
+    Shared(&'a SymbolResolver),
+    /// Ask the caller on first use (see `NavigationProvider::file_resolver`).
+    Lazy(&'a dyn Fn() -> SymbolResolver),
+}
+
+impl InferenceContext<'_> {
+    fn resolver(&self) -> &SymbolResolver {
+        match self.resolver_source {
+            ResolverSource::Shared(resolver) => resolver,
+            ResolverSource::Lazy(build) => self.resolver.get_or_init(build),
+            ResolverSource::Build => self.resolver.get_or_init(|| {
+                ResolverBuilder::with_workspace(self.file_id, Arc::clone(self.workspace_index))
+                    .build_from_syntax(self.syntax_root)
+            }),
+        }
+    }
 }
 
 /// Confidence level for inferred types
@@ -97,6 +127,29 @@ pub fn infer_argument_types(
         syntax_root,
         offset,
         file_sem: None,
+        resolver_source: ResolverSource::Build,
+        resolver: OnceCell::new(),
+        engine: OnceCell::new(),
+    };
+    infer_argument_types_impl(arg_list, &ctx)
+}
+
+/// [`infer_argument_types`] with the caller's choice of [`ResolverSource`].
+pub(crate) fn infer_argument_types_with_resolver(
+    arg_list: &SyntaxNode<JavaLanguage>,
+    file_id: FileId,
+    workspace_index: &Arc<WorkspaceIndex>,
+    syntax_root: &SyntaxNode<JavaLanguage>,
+    offset: u32,
+    resolver_source: ResolverSource<'_>,
+) -> Vec<InferredType> {
+    let ctx = InferenceContext {
+        file_id,
+        workspace_index,
+        syntax_root,
+        offset,
+        file_sem: None,
+        resolver_source,
         resolver: OnceCell::new(),
         engine: OnceCell::new(),
     };
@@ -122,6 +175,7 @@ pub fn infer_argument_types_with_semantics(
         syntax_root,
         offset,
         file_sem,
+        resolver_source: ResolverSource::Build,
         resolver: OnceCell::new(),
         engine: OnceCell::new(),
     };
@@ -190,6 +244,30 @@ pub(crate) fn infer_expression_type_for_navigation(
         syntax_root,
         offset,
         file_sem: None,
+        resolver_source: ResolverSource::Build,
+        resolver: OnceCell::new(),
+        engine: OnceCell::new(),
+    };
+    infer_expression_type(expr, &ctx)
+}
+
+/// [`infer_expression_type_for_navigation`] with the caller's choice of
+/// [`ResolverSource`].
+pub(crate) fn infer_expression_type_with_resolver(
+    expr: &SyntaxNode<JavaLanguage>,
+    file_id: FileId,
+    workspace_index: &Arc<WorkspaceIndex>,
+    syntax_root: &SyntaxNode<JavaLanguage>,
+    offset: u32,
+    resolver_source: ResolverSource<'_>,
+) -> InferredType {
+    let ctx = InferenceContext {
+        file_id,
+        workspace_index,
+        syntax_root,
+        offset,
+        file_sem: None,
+        resolver_source,
         resolver: OnceCell::new(),
         engine: OnceCell::new(),
     };
@@ -266,10 +344,7 @@ fn infer_expression_type(expr: &SyntaxNode<JavaLanguage>, ctx: &InferenceContext
         SyntaxKind::METHOD_CALL_EXPR
         | SyntaxKind::FIELD_ACCESS_EXPR
         | SyntaxKind::ARRAY_ACCESS_EXPR => {
-            let resolver = ctx.resolver.get_or_init(|| {
-                ResolverBuilder::with_workspace(ctx.file_id, Arc::clone(ctx.workspace_index))
-                    .build_from_syntax(ctx.syntax_root)
-            });
+            let resolver = ctx.resolver();
             let engine = ctx.engine.get_or_init(|| {
                 TypeInferenceEngine::new(Arc::clone(ctx.workspace_index), ctx.file_id)
             });
@@ -476,10 +551,7 @@ fn infer_name_expr_type(expr: &SyntaxNode<JavaLanguage>, ctx: &InferenceContext)
     let name = expr.text().to_string().trim().to_string();
 
     // Build resolver to look up variables
-    let resolver = ctx.resolver.get_or_init(|| {
-        ResolverBuilder::with_workspace(ctx.file_id, Arc::clone(ctx.workspace_index))
-            .build_from_syntax(ctx.syntax_root)
-    });
+    let resolver = ctx.resolver();
 
     // Resolve from the expression's exact lexical position.
     let expression_offset = u32::from(expr.text_range().start());

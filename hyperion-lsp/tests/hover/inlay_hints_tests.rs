@@ -513,3 +513,56 @@ class Test {
     assert!(hints.iter().any(|h| h.contains("String")));
     assert!(hints.iter().any(|h| h.contains("boolean")));
 }
+
+#[test]
+fn parameter_hints_cover_unqualified_calls_to_the_enclosing_class() {
+    // `label(...)` has no receiver expression: its only expression child is
+    // the method name. Treating that name as a receiver ended the lookup, so
+    // calls to a class's own methods (most calls in a class) had no hints.
+    let source = r#"
+class Shop {
+    static String label(String name, int quantity, boolean urgent) { return name; }
+    static String label(String name, int quantity) { return label(name, quantity, false); }
+
+    void restock(String product, int amount) {
+        label("tea", 3, true);
+        label("milk", 1);
+        this.restock("oats", 10);
+    }
+}
+"#;
+
+    let hints = test_inlay_hints_with_indexed_file(source, "src/main/java/Shop.java");
+    let param_hints: Vec<_> = hints.iter().filter(|h| h.ends_with(':')).cloned().collect();
+    assert_eq!(
+        param_hints,
+        [
+            // label(name, quantity, false) inside the two-parameter overload
+            "name:",
+            "quantity:",
+            "urgent:",
+            // label("tea", 3, true)
+            "name:",
+            "quantity:",
+            "urgent:",
+            // label("milk", 1)
+            "name:",
+            "quantity:",
+            // this.restock("oats", 10)
+            "product:",
+            "amount:",
+        ],
+    );
+}
+
+#[test]
+fn hints_survive_a_range_that_ends_past_the_document() {
+    // Editors describe "the whole file" as ending at the start of the line
+    // after the last one. Without a trailing newline that line does not
+    // exist, and rejecting it returned no hints for the file at all.
+    let source = "class Geometry {\n    double area(double width, double height) { return 0; }\n    void test() { new Geometry().area(1.0, 2.0); var copy = new Geometry(); }\n}";
+    assert!(!source.ends_with('\n'));
+
+    let hints = test_inlay_hints_with_indexed_file(source, "src/main/java/Geometry.java");
+    assert_eq!(hints, ["width:", "height:", ": Geometry"]);
+}

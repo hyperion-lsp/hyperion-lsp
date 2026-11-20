@@ -30,7 +30,7 @@ use tracing::debug;
 use crate::kotlin_calls::{
     analyze_call, best_signature, KotlinArgument, KotlinCalleeResolver, KotlinParameter,
 };
-use crate::position_utils::{offset_to_position, position_to_offset};
+use crate::position_utils::{offset_to_position, LineIndex};
 use crate::semantic_host::ReadTxn;
 
 /// Longest identifier argument that still counts as a "short expression" and so
@@ -58,10 +58,10 @@ impl<'txn> KotlinInlayHintsProvider<'txn> {
         range: Range,
         source_text: &str,
     ) -> Result<Vec<InlayHint>, String> {
-        let start_offset = position_to_offset(source_text, range.start)
-            .map_err(|e| format!("Invalid start position: {e}"))?;
-        let end_offset = position_to_offset(source_text, range.end)
-            .map_err(|e| format!("Invalid end position: {e}"))?;
+        // The range is a window, not a location: clamp it to the document
+        // rather than fail the request (see `LineIndex`).
+        let (start_offset, end_offset) =
+            LineIndex::new(source_text).clamped_range_to_offsets(source_text, range);
 
         // try_lock_for: degrade to no hints rather than freeze the editor if
         // did_change currently holds the DB mutex.

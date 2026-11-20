@@ -12,7 +12,6 @@ use crate::navigation_util::{find_scope_at_position, offset_to_position};
 use hyperion_parser::SyntaxKind;
 use hyperion_semantics::db::SemanticDatabase;
 use hyperion_semantics::resolved_name::ResolvedName;
-use hyperion_semantics::resolver::ResolverBuilder;
 use hyperion_semantics::symbol::Type;
 use hyperion_workspace::DeclarationNamespace;
 use rowan::{SyntaxNode, SyntaxToken, TextSize};
@@ -607,8 +606,7 @@ impl NavigationProvider<'_> {
 
         // Bind the receiver at the request position. A name found in a sibling
         // type or a later local declaration is not a receiver identity.
-        let builder = ResolverBuilder::with_workspace(ctx.file_id, ctx.workspace_index.clone());
-        let resolver = builder.build_from_syntax(&ctx.parse_tree.syntax());
+        let resolver = self.file_resolver(ctx.file_id, &ctx.parse_tree.syntax());
         let offset = u32::try_from(ctx.offset).ok()?;
         let scope = resolver.find_scope_at_offset(offset)?;
         let symbol = resolver.resolve_in_scope_at_offset(receiver_text, scope, offset)?;
@@ -680,8 +678,7 @@ impl NavigationProvider<'_> {
             qualified_name
         );
 
-        let builder = ResolverBuilder::with_workspace(ctx.file_id, ctx.workspace_index.clone());
-        let resolver = builder.build_from_syntax(&ctx.parse_tree.syntax());
+        let resolver = self.file_resolver(ctx.file_id, &ctx.parse_tree.syntax());
 
         let simple_name = qualified_name
             .split('.')
