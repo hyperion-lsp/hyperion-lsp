@@ -1076,7 +1076,7 @@ dependencies = [
 
 [[package]]
 name = "hyperion-actions"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "hyperion-parser",
@@ -1093,7 +1093,7 @@ dependencies = [
 
 [[package]]
 name = "hyperion-build"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "base64",
@@ -1115,7 +1115,7 @@ dependencies = [
 
 [[package]]
 name = "hyperion-bytecode"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "base64",
@@ -1146,7 +1146,7 @@ dependencies = [
 
 [[package]]
 name = "hyperion-dap"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "dashmap 5.5.3",
  "hyperion-jdwp",
@@ -1163,7 +1163,7 @@ dependencies = [
 
 [[package]]
 name = "hyperion-eval"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1176,7 +1176,7 @@ dependencies = [
 
 [[package]]
 name = "hyperion-fmt"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "criterion",
  "hyperion-parser",
@@ -1193,7 +1193,7 @@ dependencies = [
 
 [[package]]
 name = "hyperion-groovy"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "criterion",
@@ -1215,7 +1215,7 @@ dependencies = [
 
 [[package]]
 name = "hyperion-jdwp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytes",
  "dashmap 5.5.3",
@@ -1229,7 +1229,7 @@ dependencies = [
 
 [[package]]
 name = "hyperion-kotlin"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "criterion",
@@ -1249,14 +1249,14 @@ dependencies = [
 
 [[package]]
 name = "hyperion-layout"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "tempfile",
 ]
 
 [[package]]
 name = "hyperion-lsp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "bincode",
@@ -1318,7 +1318,7 @@ dependencies = [
 
 [[package]]
 name = "hyperion-parser"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "criterion",
  "itertools 0.12.1",
@@ -1333,7 +1333,7 @@ dependencies = [
 
 [[package]]
 name = "hyperion-refactor"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "hyperion-parser",
@@ -1351,7 +1351,7 @@ dependencies = [
 
 [[package]]
 name = "hyperion-scala"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "hyperion-types",
@@ -1366,7 +1366,7 @@ dependencies = [
 
 [[package]]
 name = "hyperion-security"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "atty",
  "bitflags 2.10.0",
@@ -1391,7 +1391,7 @@ dependencies = [
 
 [[package]]
 name = "hyperion-semantics"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "criterion",
@@ -1416,7 +1416,7 @@ dependencies = [
 
 [[package]]
 name = "hyperion-types"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "hyperion-parser",
  "rowan",
@@ -1425,7 +1425,7 @@ dependencies = [
 
 [[package]]
 name = "hyperion-workspace"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "bincode",
