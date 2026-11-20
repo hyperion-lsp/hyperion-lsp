@@ -25,6 +25,11 @@
   whole file" when the file has no trailing newline) returned no hints. Window
   ranges are now clamped to the document.
 
+- Workspace discovery and source reads stay stable across file updates.
+- Maven profiles are resolved with per-POM activation and override rules.
+- Java `switch` expressions take their type from every correctly scoped
+  `yield`.
+
 ### Performance
 
 - Find references and the usage pass of indexing looked up the members of a
