@@ -44,7 +44,8 @@
 - Inlay hints for a whole file built the file's symbol table again for every
   method call, re-read the line table for every hint and re-opened the JDK
   module archive for every call into the JDK. A 9,500-line file went from
-  6.9 s to 0.4 s.
+  6.9 s to 1.4 s, while producing 875 hints instead of 486 (the unqualified
+  calls above); for the same 486 hints it took 0.4 s.
 
 ## 0.1.0 — initial public release
 
