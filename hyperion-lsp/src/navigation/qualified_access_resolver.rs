@@ -151,7 +151,6 @@ impl NavigationProvider<'_> {
         offset: u32,
         root: &hyperion_parser::syntax::SyntaxNode,
     ) -> Result<Option<Location>, String> {
-        use hyperion_semantics::resolver::ResolverBuilder;
         use hyperion_semantics::symbol::Type;
 
         debug!("resolve_qualified_access: resolving");
@@ -316,8 +315,7 @@ impl NavigationProvider<'_> {
         }
 
         // Build symbol resolver from parse tree
-        let builder = ResolverBuilder::with_workspace(file_id, self.workspace_index.clone());
-        let resolver = builder.build_from_syntax(root);
+        let resolver = self.file_resolver(file_id, root);
 
         // Find the scope at the cursor position
         let scope_at_position = resolver.find_scope_at_offset(offset);
@@ -869,11 +867,7 @@ impl NavigationProvider<'_> {
         expr: &SyntaxNode,
         _offset: u32,
     ) -> Option<Type> {
-        let builder = hyperion_semantics::resolver::ResolverBuilder::with_workspace(
-            ctx.file_id,
-            self.workspace_index.clone(),
-        );
-        let resolver = builder.build_from_syntax(&ctx.parse_tree.syntax());
+        let resolver = self.file_resolver(ctx.file_id, &ctx.parse_tree.syntax());
         let engine = self.create_type_inference_engine(ctx.file_id);
         let inferred = engine.infer_expression(expr, &resolver, None);
         if matches!(inferred, Type::Unknown) {

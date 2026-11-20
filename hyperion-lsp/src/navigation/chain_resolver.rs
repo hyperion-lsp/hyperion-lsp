@@ -16,7 +16,7 @@ use tower_lsp::lsp_types::{Location, SymbolKind};
 use tracing::debug;
 
 use super::NavigationProvider;
-use crate::navigation::argument_inference::infer_argument_types;
+use crate::navigation::argument_inference::{infer_argument_types_with_resolver, ResolverSource};
 use crate::navigation::import_resolver::{
     resolve_static_value_type_via_imports, StaticValueTypeResolution,
 };
@@ -193,10 +193,17 @@ impl NavigationProvider<'_> {
             .find(|node| node.kind() == hyperion_parser::syntax::SyntaxKind::ARG_LIST)?;
         let offset = u32::from(call_range.start());
         Some(
-            infer_argument_types(&arg_list, file_id, &self.workspace_index, root, offset)
-                .into_iter()
-                .map(|inferred| inferred.ty)
-                .collect(),
+            infer_argument_types_with_resolver(
+                &arg_list,
+                file_id,
+                &self.workspace_index,
+                root,
+                offset,
+                ResolverSource::Lazy(&|| self.file_resolver(file_id, root)),
+            )
+            .into_iter()
+            .map(|inferred| inferred.ty)
+            .collect(),
         )
     }
 
@@ -678,8 +685,7 @@ impl NavigationProvider<'_> {
         }
 
         // Build symbol resolver from parse tree
-        let builder = ResolverBuilder::with_workspace(file_id, self.workspace_index.clone());
-        let resolver = builder.build_from_syntax(root);
+        let resolver = self.file_resolver(file_id, root);
         let scope_at_position = resolver.find_scope_at_offset(offset);
 
         // Resolve the first segment's type

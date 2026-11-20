@@ -914,6 +914,13 @@ impl WorkspaceIndex {
         self.source_scope.is_some()
     }
 
+    /// The classpath this view resolves through, if it is a scoped view. Two
+    /// views of one index with equal scopes resolve every name identically.
+    #[must_use]
+    pub fn source_scope(&self) -> Option<&SourceScope> {
+        self.source_scope.as_ref()
+    }
+
     /// Publication proof to retain with a result derived from this view.
     #[must_use]
     pub fn source_scope_refresh_ticket(&self) -> Option<ExternalSourceRefreshTicket> {

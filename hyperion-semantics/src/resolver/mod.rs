@@ -184,6 +184,11 @@ pub struct ResolvedSymbol {
 }
 
 /// Symbol resolution engine that walks scope chains
+///
+/// Cloning shares the symbol table and copies only the per-use state (scope
+/// stacks and the resolution cache), so a built resolver can serve as a
+/// template for several lookups in one file.
+#[derive(Clone)]
 pub struct SymbolResolver {
     /// The symbol table containing all symbols and scopes.
     /// Stored as Arc to allow sharing cached tables without cloning.

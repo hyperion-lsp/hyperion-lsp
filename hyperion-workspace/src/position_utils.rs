@@ -135,6 +135,46 @@ impl LineIndex {
         Ok((start, end))
     }
 
+    /// The byte offset nearest to `position` that lies inside `source`.
+    ///
+    /// For requests that ask about a *window* of the document (inlay hints)
+    /// rather than name an exact location. Clients routinely describe "to the
+    /// end of the file" as the start of the line after the last one, and the
+    /// LSP specification says a character past the end of its line means the
+    /// end of that line. Rejecting either drops the whole response, so both
+    /// are clamped: a line past the last one is the end of the document, a
+    /// character past its line is the end of that line, and a character
+    /// inside a surrogate pair is the start of that pair.
+    pub fn clamped_position_to_offset(&self, source: &str, position: Position) -> usize {
+        let line_idx = position.line as usize;
+        if line_idx >= self.line_starts.len() {
+            return source.len();
+        }
+        let line_end = line_content_end(source, &self.line_starts, line_idx);
+        let mut col = 0u32;
+        let mut offset = self.line_starts[line_idx];
+        while offset < line_end && col < position.character {
+            let Some(ch) = source[offset..].chars().next() else {
+                break;
+            };
+            let next_col = col.saturating_add(ch.len_utf16() as u32);
+            if next_col > position.character {
+                break;
+            }
+            col = next_col;
+            offset += ch.len_utf8();
+        }
+        offset
+    }
+
+    /// [`Self::clamped_position_to_offset`] for both ends of a window. A
+    /// reversed range collapses to its start.
+    pub fn clamped_range_to_offsets(&self, source: &str, range: Range) -> (usize, usize) {
+        let start = self.clamped_position_to_offset(source, range.start);
+        let end = self.clamped_position_to_offset(source, range.end);
+        (start, end.max(start))
+    }
+
     pub fn text_range_to_lsp_range(&self, source: &str, range: rowan::TextRange) -> Range {
         Range::new(
             self.offset_to_position(source, range.start().into()),
@@ -432,6 +472,85 @@ pub fn text_range_to_lsp_range(text_range: rowan::TextRange, source_text: &str) 
 mod line_index_tests {
     use super::*;
     use std::fmt::Write;
+
+    #[test]
+    fn clamped_offsets_agree_with_exact_ones_inside_the_document() {
+        let source = "ab\r\nc\u{1F600}d\n\nlast";
+        let index = LineIndex::new(source);
+        for (offset, _) in source.char_indices().chain([(source.len(), ' ')]) {
+            let position = index.offset_to_position(source, offset);
+            if let Ok(exact) = index.position_to_offset(source, position) {
+                assert_eq!(
+                    index.clamped_position_to_offset(source, position),
+                    exact,
+                    "{position:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn clamped_offset_treats_a_line_past_the_end_as_end_of_document() {
+        // A client asking for "the whole file" names the line after the last
+        // one, whether or not the text ends in a newline.
+        for source in ["one\ntwo", "one\ntwo\n", ""] {
+            let index = LineIndex::new(source);
+            let lines = u32::try_from(source.lines().count()).unwrap();
+            for line in [lines + 1, lines + 2, u32::MAX] {
+                assert_eq!(
+                    index.clamped_position_to_offset(source, Position::new(line, 0)),
+                    source.len(),
+                    "{source:?} line {line}"
+                );
+                assert!(index
+                    .position_to_offset(source, Position::new(line, 0))
+                    .is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn clamped_offset_stops_at_the_end_of_the_line() {
+        let source = "ab\r\ncd\nef";
+        let index = LineIndex::new(source);
+        assert_eq!(
+            index.clamped_position_to_offset(source, Position::new(0, 99)),
+            2
+        );
+        assert_eq!(
+            index.clamped_position_to_offset(source, Position::new(1, u32::MAX)),
+            6
+        );
+        assert_eq!(
+            index.clamped_position_to_offset(source, Position::new(2, 3)),
+            source.len()
+        );
+    }
+
+    #[test]
+    fn clamped_offset_never_splits_a_surrogate_pair() {
+        let source = "a\u{1F600}b";
+        let index = LineIndex::new(source);
+        // UTF-16: `a` is column 0, the emoji columns 1-2, `b` column 3.
+        assert_eq!(
+            index.clamped_position_to_offset(source, Position::new(0, 2)),
+            1
+        );
+        assert_eq!(
+            index.clamped_position_to_offset(source, Position::new(0, 3)),
+            5
+        );
+    }
+
+    #[test]
+    fn clamped_range_collapses_when_reversed() {
+        let source = "one\ntwo\n";
+        let index = LineIndex::new(source);
+        let reversed = Range::new(Position::new(1, 2), Position::new(0, 1));
+        assert_eq!(index.clamped_range_to_offsets(source, reversed), (6, 6));
+        let whole = Range::new(Position::new(0, 0), Position::new(2, 0));
+        assert_eq!(index.clamped_range_to_offsets(source, whole), (0, 8));
+    }
 
     #[test]
     fn shared_index_handles_utf16_unicode_and_crlf() {

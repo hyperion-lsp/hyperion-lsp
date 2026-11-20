@@ -9,7 +9,7 @@
 
 use hyperion_parser::syntax::{SyntaxKind, SyntaxNode};
 use hyperion_semantics::db::{FileId, ParseDatabase, SourceDatabase};
-use hyperion_semantics::resolver::ResolverBuilder;
+use hyperion_semantics::resolver::{ResolverBuilder, SymbolResolver};
 use hyperion_semantics::TypeInferenceEngine;
 use hyperion_workspace::{
     DeclarationNamespace, DefinitionSourceAuthority, FileRevisionToken, QueryEngine,
@@ -23,7 +23,7 @@ use tracing::debug;
 use crate::semantic_host::ReadTxn;
 
 use crate::navigation::argument_inference::{
-    infer_argument_types, infer_expression_type_for_navigation,
+    infer_argument_types_with_resolver, infer_expression_type_for_navigation, ResolverSource,
 };
 use crate::navigation::call_site_analysis::find_method_call_for_token;
 use crate::navigation::context::NavigationContext;
@@ -46,6 +46,19 @@ pub struct NavigationProvider<'txn> {
     pub(crate) workspace_index: Arc<WorkspaceIndex>,
     pub(crate) query_engine: Arc<QueryEngine>,
     pub(crate) source_providers: Arc<crate::source_provider::SourceProviderChain>,
+    /// See [`NavigationProvider::file_resolver`]. Shared with the scoped
+    /// providers this one creates, which do not outlive a single lookup.
+    file_resolver: Arc<parking_lot::Mutex<Option<FileResolverMemo>>>,
+}
+
+/// The workspace-aware resolver of the file a request last resolved in.
+struct FileResolverMemo {
+    file_id: FileId,
+    /// Keeps the tree alive, so its address identifies it for the memo's life.
+    green: rowan::GreenNode,
+    scope: Option<hyperion_workspace::SourceScope>,
+    workspace_revision: hyperion_workspace::WorkspaceRevision,
+    resolver: SymbolResolver,
 }
 
 /// One workspace declaration resolved from a source position through the
@@ -240,12 +253,14 @@ impl<'txn> NavigationProvider<'txn> {
                         .find(|child| child.kind() == SyntaxKind::ARG_LIST)
                 });
                 let argument_types = arguments.as_ref().map(|arguments| {
-                    infer_argument_types(
+                    let root = ctx.parse_tree.syntax();
+                    infer_argument_types_with_resolver(
                         arguments,
                         ctx.file_id,
                         &self.workspace_index,
-                        &ctx.parse_tree.syntax(),
+                        &root,
                         offset,
+                        ResolverSource::Lazy(&|| self.file_resolver(ctx.file_id, &root)),
                     )
                     .into_iter()
                     .map(|inferred| inferred.ty)
@@ -353,8 +368,7 @@ impl<'txn> NavigationProvider<'txn> {
             || find_method_call_for_token(token).is_some()
         {
             let engine = self.create_type_inference_engine(ctx.file_id);
-            let builder = ResolverBuilder::with_workspace(ctx.file_id, ctx.workspace_index.clone());
-            let resolver = builder.build_from_syntax(&ctx.parse_tree.syntax());
+            let resolver = self.file_resolver(ctx.file_id, &ctx.parse_tree.syntax());
             let mut inferred = hyperion_semantics::symbol::Type::Unknown;
 
             if let Some(receiver_expr) = self.find_receiver_expression_for_member(token) {
@@ -606,7 +620,7 @@ impl<'txn> NavigationProvider<'txn> {
         Ok(None)
     }
     /// Creates a new NavigationProvider
-    pub const fn new(
+    pub fn new(
         txn: &'txn ReadTxn,
         workspace_index: Arc<WorkspaceIndex>,
         query_engine: Arc<QueryEngine>,
@@ -617,7 +631,41 @@ impl<'txn> NavigationProvider<'txn> {
             workspace_index,
             query_engine,
             source_providers,
+            file_resolver: Arc::default(),
         }
+    }
+
+    /// A workspace-aware symbol resolver for the file rooted at `root`.
+    ///
+    /// Building one walks the entire tree. A request that resolves many
+    /// positions of one file (inlay hints resolve every call) therefore keeps
+    /// the last one built and hands out copies. A copy is only reused for the
+    /// same tree, the same classpath view and an unchanged workspace revision,
+    /// which are exactly the inputs of the build.
+    pub(crate) fn file_resolver(&self, file_id: FileId, root: &SyntaxNode) -> SymbolResolver {
+        let green = root.green();
+        let scope = self.workspace_index.source_scope();
+        let workspace_revision = self.workspace_index.current_workspace_revision();
+        let mut memo = self.file_resolver.lock();
+        if let Some(memo) = memo.as_ref() {
+            if memo.file_id == file_id
+                && memo.scope.as_ref() == scope
+                && memo.workspace_revision == workspace_revision
+                && std::ptr::eq::<rowan::GreenNodeData>(&raw const *memo.green, &raw const *green)
+            {
+                return memo.resolver.clone();
+            }
+        }
+        let resolver = ResolverBuilder::with_workspace(file_id, Arc::clone(&self.workspace_index))
+            .build_from_syntax(root);
+        *memo = Some(FileResolverMemo {
+            file_id,
+            green: green.into_owned(),
+            scope: scope.cloned(),
+            workspace_revision,
+            resolver: resolver.clone(),
+        });
+        resolver
     }
 
     /// Create a TypeInferenceEngine for expression type inference
@@ -684,6 +732,7 @@ impl<'txn> NavigationProvider<'txn> {
             query_engine: Arc::new(QueryEngine::new((*workspace_index).clone())),
             workspace_index,
             source_providers: Arc::clone(&self.source_providers),
+            file_resolver: Arc::clone(&self.file_resolver),
         })
     }
 
@@ -2037,12 +2086,13 @@ impl<'txn> NavigationProvider<'txn> {
             .children()
             .find(|n| n.kind() == SyntaxKind::ARG_LIST)?;
 
-        let arg_types = infer_argument_types(
+        let arg_types = infer_argument_types_with_resolver(
             &arg_list,
             file_id,
             &self.workspace_index,
             syntax_root,
             offset as u32,
+            ResolverSource::Lazy(&|| self.file_resolver(file_id, syntax_root)),
         );
 
         debug!(
@@ -2062,9 +2112,7 @@ impl<'txn> NavigationProvider<'txn> {
             .find(|node| is_receiver_expression_kind(node.kind()))
             .map(|receiver| {
                 let engine = self.create_type_inference_engine(file_id);
-                let resolver =
-                    ResolverBuilder::with_workspace(file_id, self.workspace_index.clone())
-                        .build_from_syntax(syntax_root);
+                let resolver = self.file_resolver(file_id, syntax_root);
                 engine.infer_expression(&receiver, &resolver, None)
             });
         let matched = crate::navigation::overload_resolver::resolve_overload_with_arguments(
