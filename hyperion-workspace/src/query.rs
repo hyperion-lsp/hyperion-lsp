@@ -263,7 +263,7 @@ impl QueryEngine {
             {
                 continue;
             }
-            let usages = match self.index.find_current_usages_for_symbol_targets(
+            let usages = match self.index.find_current_usages_for_navigation(
                 &targets,
                 Some(workspace_revision),
                 &is_cancelled,

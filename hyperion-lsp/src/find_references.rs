@@ -167,10 +167,7 @@ impl NavigationProvider<'_> {
 
         let target_name = token.text();
         debug!("Finding references to: {}", target_name);
-        let expected_context_kind = token
-            .parent()
-            .as_ref()
-            .and_then(Self::expected_symbol_kind_from_context);
+        let expected_context_kind = Self::expected_symbol_kind_from_context(&token);
 
         if token
             .parent()
@@ -390,71 +387,44 @@ impl NavigationProvider<'_> {
         }
     }
 
-    fn expected_symbol_kind_from_context(
-        parent: &hyperion_parser::syntax::SyntaxNode,
+    /// The kind of declaration `token` must name, when its syntactic position
+    /// alone decides that.
+    ///
+    /// Only the name itself is decided by its position: the `m` of `m(x)` is
+    /// a method, but `x` is whatever it resolves to. Treating every identifier
+    /// inside a call as a method made find-references on a variable passed as
+    /// an argument drop the variable's declaration and each use that was not
+    /// itself an argument.
+    pub(crate) fn expected_symbol_kind_from_context(
+        token: &hyperion_parser::syntax::SyntaxToken,
     ) -> Option<SymbolKind> {
+        let parent = token.parent()?;
+
         // A type spelling may sit inside FIELD_DECL, METHOD_DECL, or PARAM.
         // Those enclosing declarations describe a different identifier; the
         // nearest CLASS_TYPE is authoritative for the token under the cursor.
-        if parent.kind() == SyntaxKind::CLASS_TYPE
-            || parent
-                .ancestors()
-                .any(|node| node.kind() == SyntaxKind::CLASS_TYPE)
+        if parent
+            .ancestors()
+            .any(|node| node.kind() == SyntaxKind::CLASS_TYPE)
         {
             return Some(SymbolKind::CLASS);
         }
 
-        if parent
-            .ancestors()
-            .any(|node| node.kind() == SyntaxKind::METHOD_CALL_EXPR)
-        {
+        if crate::navigation::call_site_analysis::find_method_call_for_token(token).is_some() {
             return Some(SymbolKind::METHOD);
         }
 
-        if parent
-            .ancestors()
-            .any(|node| node.kind() == SyntaxKind::METHOD_DECL)
-            && !parent
-                .ancestors()
-                .any(|node| node.kind() == SyntaxKind::BLOCK_STMT)
-            && !parent
-                .ancestors()
-                .any(|node| node.kind() == SyntaxKind::PARAM)
-        {
-            return Some(SymbolKind::METHOD);
+        match parent.kind() {
+            SyntaxKind::METHOD_DECL => Some(SymbolKind::METHOD),
+            // The member name is a direct child; a receiver or an initializer
+            // is an expression node of its own.
+            SyntaxKind::FIELD_DECL | SyntaxKind::FIELD_ACCESS_EXPR => Some(SymbolKind::FIELD),
+            SyntaxKind::ENUM_CONSTANT => Some(SymbolKind::ENUM_MEMBER),
+            SyntaxKind::CLASS_DECL => Some(SymbolKind::CLASS),
+            SyntaxKind::INTERFACE_DECL => Some(SymbolKind::INTERFACE),
+            SyntaxKind::ENUM_DECL => Some(SymbolKind::ENUM),
+            _ => None,
         }
-
-        if parent.kind() == SyntaxKind::FIELD_DECL
-            || parent
-                .ancestors()
-                .any(|node| node.kind() == SyntaxKind::FIELD_DECL)
-            || parent
-                .ancestors()
-                .any(|node| node.kind() == SyntaxKind::FIELD_ACCESS_EXPR)
-        {
-            return Some(SymbolKind::FIELD);
-        }
-
-        if parent
-            .ancestors()
-            .any(|node| node.kind() == SyntaxKind::ENUM_CONSTANT)
-        {
-            return Some(SymbolKind::ENUM_MEMBER);
-        }
-
-        if parent.kind() == SyntaxKind::CLASS_DECL {
-            return Some(SymbolKind::CLASS);
-        }
-
-        if parent.kind() == SyntaxKind::INTERFACE_DECL {
-            return Some(SymbolKind::INTERFACE);
-        }
-
-        if parent.kind() == SyntaxKind::ENUM_DECL {
-            return Some(SymbolKind::ENUM);
-        }
-
-        None
     }
 
     fn symbol_kind_matches_context(actual: SymbolKind, expected: SymbolKind) -> bool {

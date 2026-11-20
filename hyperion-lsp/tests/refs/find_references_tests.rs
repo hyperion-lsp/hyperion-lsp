@@ -3048,3 +3048,153 @@ fn overloaded_declaration_does_not_become_a_descriptorless_reference_target() {
         .iter()
         .all(|location| location.range.start.line != 1 && location.range.start.line != 4));
 }
+
+/// Line/column pairs of the references found at `needle`'s `occurrence`-th
+/// occurrence in the first file, in document order.
+fn reference_positions(
+    workspace: Vec<(&str, &str)>,
+    needle: &str,
+    occurrence: usize,
+) -> Vec<(String, u32, u32)> {
+    let (_temp, index, files) = create_test_workspace(workspace);
+    let index = Arc::new(index);
+    let host = SemanticHost::new(Arc::clone(&index));
+    for (path, file_id) in &files {
+        let content = std::fs::read_to_string(path).unwrap();
+        host.with_db(|db| {
+            db.set_file_text(*file_id, Arc::new(content));
+            db.set_file_language(*file_id, Language::Java);
+        });
+    }
+    let txn = host.read_now();
+    let provider = NavigationProvider::new(
+        &txn,
+        Arc::clone(&index),
+        Arc::new(QueryEngine::new((*index).clone())),
+        Arc::new(hyperion_lsp::source_provider::SourceProviderChain::new()),
+    );
+
+    let (file_path, file_id) = &files[0];
+    let source = std::fs::read_to_string(file_path).unwrap();
+    let (offset, _) = source
+        .match_indices(needle)
+        .nth(occurrence)
+        .unwrap_or_else(|| panic!("occurrence {occurrence} of {needle:?}"));
+    let line = source[..offset].matches('\n').count();
+    let column = offset
+        - source[..offset]
+            .rfind('\n')
+            .map_or(0, |newline| newline + 1);
+    let position = Position::new(line as u32, column as u32);
+
+    let mut found: Vec<_> =
+        find_refs_at_position(&provider, *file_id, &source, file_path, position, true)
+            .into_iter()
+            .map(|location| {
+                let file = location.uri.path().rsplit('/').next().unwrap().to_string();
+                (
+                    file,
+                    location.range.start.line,
+                    location.range.start.character,
+                )
+            })
+            .collect();
+    found.sort();
+    found
+}
+
+#[test]
+fn variable_references_are_the_same_from_every_use() {
+    // A use that is a call argument used to be taken for a method name, which
+    // dropped the declaration and every use that was not itself an argument.
+    let workspace = || {
+        vec![(
+            "com/example/Processor.java",
+            r"package com.example;
+
+public class Processor {
+    public String process(String data) {
+        System.out.println(data);
+        String upper = data.toUpperCase();
+        return data;
+    }
+}
+",
+        )]
+    };
+    let file = "Processor.java".to_string();
+    let expected = vec![
+        (file.clone(), 3, 33),
+        (file.clone(), 4, 27),
+        (file.clone(), 5, 23),
+        (file, 6, 15),
+    ];
+
+    for (description, occurrence) in [
+        ("the declaration", 0),
+        ("a call argument", 1),
+        ("a receiver", 2),
+        ("a plain use", 3),
+    ] {
+        assert_eq!(
+            reference_positions(workspace(), "data", occurrence),
+            expected,
+            "queried from {description}"
+        );
+    }
+}
+
+#[test]
+fn method_references_survive_a_call_that_does_not_determine_the_overload() {
+    // The argument type of `u.pick(Util.make())` is not inferred at the call
+    // site, so it may call `pick(String)` or `pick(int)`. One such call used to
+    // empty the reference list of every overload of `pick`.
+    let workspace = || {
+        vec![
+            (
+                "p/Util.java",
+                r#"package p;
+
+class Util {
+    static String make() { return ""; }
+    void pick(int number) {}
+    void pick(String text) {}
+    void pick(String first, String second) {}
+}
+"#,
+            ),
+            (
+                "p/Use.java",
+                r#"package p;
+
+class Use {
+    void run(Util u) {
+        u.pick("exact");
+        u.pick(Util.make());
+        u.pick(1);
+        u.pick(Util.make(), Util.make());
+    }
+}
+"#,
+            ),
+        ]
+    };
+    let util = |line| ("Util.java".to_string(), line, 9);
+    let call = |line| ("Use.java".to_string(), line, 10);
+
+    assert_eq!(
+        reference_positions(workspace(), "pick(String text)", 0),
+        [call(4), call(5), util(5)],
+        "pick(String): its exact call and the undetermined one"
+    );
+    assert_eq!(
+        reference_positions(workspace(), "pick(int number)", 0),
+        [call(5), call(6), util(4)],
+        "pick(int): its exact call and the undetermined one"
+    );
+    assert_eq!(
+        reference_positions(workspace(), "pick(String first", 0),
+        [call(7), util(6)],
+        "pick(String, String): no one-argument call can be a reference"
+    );
+}

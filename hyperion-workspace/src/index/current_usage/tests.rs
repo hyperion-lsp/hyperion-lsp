@@ -635,6 +635,157 @@ fn exact_unique_overload_accepts_descriptorless_and_unique_arity_usages() {
 }
 
 #[test]
+fn placeholder_usage_of_another_arity_is_not_a_usage_of_the_overload() {
+    let overload = |fqn: &str, parameter_count| CallableOverload {
+        fqn: Arc::from(fqn),
+        parameter_count,
+        variadic: false,
+    };
+    let target = |overloads| CurrentUsageTarget {
+        fqn: Arc::from("p.Mixed.pick(String)"),
+        namespace: Some(crate::DeclarationNamespace::Callable),
+        kind: CurrentUsageTargetKind::MethodOverload {
+            descriptorless: Arc::from("p.Mixed.pick"),
+            inherited_descriptorless: Vec::new(),
+            overloads,
+        },
+    };
+
+    let family = target(vec![
+        overload("p.Mixed.pick(String)", 1),
+        overload("p.Mixed.pick(int)", 1),
+        overload("p.Mixed.pick(String,int)", 2),
+        overload("p.Mixed.pick(int,int)", 2),
+    ]);
+    assert_eq!(
+        family.classify("p.Mixed.pick(_,int)", SymbolKind::METHOD),
+        CurrentUsageMatch::No,
+        "a one-parameter overload cannot be the target of a two-argument call"
+    );
+    assert_eq!(
+        family.classify("p.Mixed.pick(_)", SymbolKind::METHOD),
+        CurrentUsageMatch::AmbiguousMethod
+    );
+
+    // The target is absent from the elected overloads: nothing is known about
+    // its arity, so no call may be ruled out.
+    let unknown_target = target(vec![overload("p.Mixed.pick(int)", 1)]);
+    assert_eq!(
+        unknown_target.classify("p.Mixed.pick(_,_)", SymbolKind::METHOD),
+        CurrentUsageMatch::AmbiguousMethod
+    );
+}
+
+/// `pick(String)` and `pick(int)` take one argument each, and the type of
+/// `Util.make()` is not inferred at the call site.
+fn index_overloads_with_an_unresolved_call(index: &WorkspaceIndex, root: &Path) -> FileId {
+    index
+        .index_file_with_source(
+            &root.join("Util.java"),
+            concat!(
+                "package p; class Util { static String make() { return \"\"; } ",
+                "void pick(int x) {} void pick(String x) {} ",
+                "void pick(String a, String b) {} }",
+            ),
+        )
+        .unwrap();
+    let use_path = root.join("Use.java");
+    index
+        .index_file_with_source(
+            &use_path,
+            concat!(
+                "package p; class Use { void run(Util u) { ",
+                "u.pick(\"exact\"); ",
+                "u.pick(Util.make()); ",
+                "u.pick(1); ",
+                "u.pick(Util.make(), Util.make()); } }",
+            ),
+        )
+        .unwrap();
+    index.get_file_id(&use_path).unwrap()
+}
+
+#[test]
+fn exact_query_still_fails_on_a_call_that_does_not_determine_the_overload() {
+    let temp = tempfile::tempdir().expect("temporary workspace");
+    let index = WorkspaceIndex::new(temp.path().to_path_buf());
+    index_overloads_with_an_unresolved_call(&index, temp.path());
+
+    let target = crate::SymbolTarget::new(
+        "p.Util.pick(java.lang.String)",
+        crate::DeclarationNamespace::Callable,
+    );
+    let error = index
+        .find_current_usages_for_symbol_target(&target)
+        .expect_err("an edit must not be planned around an unresolved call");
+    assert!(
+        matches!(&error, CurrentUsageQueryError::Unavailable(reason) if reason.contains("overload-ambiguous")),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn navigation_query_reports_a_call_that_does_not_determine_the_overload() {
+    let temp = tempfile::tempdir().expect("temporary workspace");
+    let index = WorkspaceIndex::new(temp.path().to_path_buf());
+    let use_file = index_overloads_with_an_unresolved_call(&index, temp.path());
+    let source = "package p; class Use { void run(Util u) { u.pick(\"exact\"); u.pick(Util.make()); u.pick(1); u.pick(Util.make(), Util.make()); } }";
+    let call_starts = |target: &str| {
+        let current = index
+            .find_current_usages_for_navigation(
+                &[crate::SymbolTarget::new(
+                    target,
+                    crate::DeclarationNamespace::Callable,
+                )],
+                None,
+                || false,
+            )
+            .expect("a reader gets the possible references");
+        assert!(index.current_usage_locations_are_current(&current));
+        let mut starts = current
+            .locations()
+            .inspect(|location| assert_eq!(location.file_id, use_file))
+            .map(|location| location.range.start as usize)
+            .collect::<Vec<_>>();
+        starts.sort_unstable();
+        starts
+    };
+    let pick = |ordinal: usize| {
+        source
+            .match_indices("u.pick(")
+            .nth(ordinal)
+            .map(|(offset, _)| offset + "u.".len())
+            .unwrap()
+    };
+
+    // The exact call and the unresolved one-argument call; never the call that
+    // provably binds to `pick(int)` and never a two-argument call.
+    assert_eq!(
+        call_starts("p.Util.pick(java.lang.String)"),
+        [pick(0), pick(1)]
+    );
+    assert_eq!(call_starts("p.Util.pick(int)"), [pick(1), pick(2)]);
+}
+
+#[test]
+fn unresolved_call_of_another_arity_does_not_fail_the_exact_query() {
+    let temp = tempfile::tempdir().expect("temporary workspace");
+    let index = WorkspaceIndex::new(temp.path().to_path_buf());
+    index_overloads_with_an_unresolved_call(&index, temp.path());
+
+    // `u.pick(Util.make())` cannot call a two-parameter method. It used to be
+    // classified as ambiguous for every overload and failed this query.
+    let target = crate::SymbolTarget::new(
+        "p.Util.pick(java.lang.String,java.lang.String)",
+        crate::DeclarationNamespace::Callable,
+    );
+    let current = index
+        .find_current_usages_for_symbol_target(&target)
+        .expect("the only two-argument call determines the overload");
+    assert_eq!(current.locations().count(), 1);
+}
+
+#[test]
 fn explicit_method_family_accepts_every_overload_but_not_a_field() {
     let target = CurrentUsageTarget {
         fqn: Arc::from("p.Mixed.pick"),

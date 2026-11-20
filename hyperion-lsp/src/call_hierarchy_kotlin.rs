@@ -217,7 +217,7 @@ impl<'txn> KotlinCallHierarchyProvider<'txn> {
 
         let usages = self
             .workspace_index
-            .find_current_usages_for_symbol_targets(
+            .find_current_usages_for_navigation(
                 &[SymbolTarget::new(
                     Arc::from(fqn.as_str()),
                     if item.kind == SymbolKind::CONSTRUCTOR {
