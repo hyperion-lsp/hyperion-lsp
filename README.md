@@ -330,7 +330,8 @@ to Java processes.
 - **Logs** go to `$TMPDIR/hyperion-lsp-<pid>.log` (or the platform temp directory
   when `TMPDIR` is unset). `LOG_FILE` overrides the directory, not the filename;
   an unwritable location falls back to stderr. Set `HYPERION_DEBUG=1` for debug
-  logging. Logs never go to stdout.
+  logging. Logs never go to stdout. A server removes logs in that directory
+  that have not been written to for a week when it starts.
 
 ---
 

@@ -378,3 +378,47 @@ lsp_hover_test! {
     hover: "test/Main.java", "<|>",
     contains: ["User", "Lambda parameter"]
 }
+
+// A method called on a lambda parameter that has no written type: the
+// receiver's type comes from the functional interface.
+lsp_hover_test! {
+    name: hover_method_call_on_untyped_lambda_param,
+
+    files: {
+        "test/Main.java" => r#"
+            package test;
+            import java.util.List;
+
+            public class Main {
+                public long test(List<String> names) {
+                    return names.stream().filter(name -> name.<|>isEmpty()).count();
+                }
+            }
+        "#
+    },
+
+    hover: "test/Main.java", "<|>",
+    contains: ["isEmpty", "java.lang.String", "boolean"]
+}
+
+// A use of the parameter inside the lambda body shows the same inferred
+// type as its declaration, not `<unknown>`.
+lsp_hover_test! {
+    name: hover_use_of_untyped_lambda_param,
+
+    files: {
+        "test/Main.java" => r#"
+            package test;
+            import java.util.List;
+
+            public class Main {
+                public long test(List<String> names) {
+                    return names.stream().filter(name -> <|>name.isEmpty()).count();
+                }
+            }
+        "#
+    },
+
+    hover: "test/Main.java", "<|>",
+    contains: ["String", "Lambda parameter"]
+}

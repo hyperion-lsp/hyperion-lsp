@@ -392,6 +392,7 @@ async fn run() -> ExitCode {
         std::env::var("LOG_FILE").map_or_else(|_| std::env::temp_dir(), std::path::PathBuf::from);
     let log_filename = format!("hyperion-lsp-{}.log", std::process::id());
     let log_file = log_dir.join(&log_filename);
+    prune_old_logs(&log_dir, std::time::SystemTime::now());
     let log_writer = match tracing_appender::rolling::RollingFileAppender::builder()
         .rotation(tracing_appender::rolling::Rotation::NEVER)
         .filename_prefix(log_filename)
@@ -456,4 +457,69 @@ async fn run() -> ExitCode {
 
     info!("Hyperion LSP Server stopped");
     ExitCode::SUCCESS
+}
+
+/// How long the log of a finished server is kept.
+const LOG_RETENTION: std::time::Duration = std::time::Duration::from_hours(7 * 24);
+
+/// Every server start writes `hyperion-lsp-<pid>.log` and nothing else ever
+/// removes it. Delete the ones not written to for [`LOG_RETENTION`]; a
+/// running server writes to its log, so its file is never that old.
+fn prune_old_logs(log_dir: &std::path::Path, now: std::time::SystemTime) {
+    let Ok(entries) = std::fs::read_dir(log_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let is_server_log = name
+            .to_str()
+            .and_then(|name| name.strip_prefix("hyperion-lsp-"))
+            .and_then(|rest| rest.strip_suffix(".log"))
+            .is_some_and(|pid| !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit()));
+        if !is_server_log {
+            continue;
+        }
+        let expired = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age > LOG_RETENTION);
+        if expired {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+#[cfg(test)]
+mod log_pruning_tests {
+    use super::{prune_old_logs, LOG_RETENTION};
+    use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn only_old_server_logs_are_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in [
+            "hyperion-lsp-123.log",
+            "hyperion-lsp-notes.log",
+            "other.log",
+        ] {
+            std::fs::write(dir.path().join(name), "x").unwrap();
+        }
+        let exists = |name: &str| dir.path().join(name).exists();
+
+        // Written just now: kept.
+        prune_old_logs(dir.path(), SystemTime::now());
+        assert!(exists("hyperion-lsp-123.log"));
+
+        // Seen from past the retention period: the server log goes, files
+        // that are not ours stay.
+        prune_old_logs(
+            dir.path(),
+            SystemTime::now() + LOG_RETENTION + Duration::from_secs(60),
+        );
+        assert!(!exists("hyperion-lsp-123.log"));
+        assert!(exists("hyperion-lsp-notes.log"));
+        assert!(exists("other.log"));
+    }
 }

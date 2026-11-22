@@ -140,8 +140,19 @@ pub(crate) fn stub_source_content(
         );
         source
     };
+    // The stub of `java/util/Map` (with `Map$Entry` inside) is `Map.java`.
+    let owner = cache()
+        .lock()
+        .owners
+        .get(&(archive_path.to_path_buf(), type_path(fqn).to_owned()))
+        .cloned()
+        .unwrap_or_else(|| type_path(fqn).to_owned());
     let temp_file = store
-        .materialize(source.content().as_bytes(), AttachmentLanguage::Java)
+        .materialize(
+            source.content().as_bytes(),
+            &owner,
+            AttachmentLanguage::Java,
+        )
         .map_err(|error| debug!("stub for {fqn} could not be materialized: {error}"))
         .ok()?;
     Some(SourceContent::Stub { source, temp_file })

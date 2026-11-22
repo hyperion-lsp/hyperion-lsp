@@ -289,10 +289,11 @@ impl JdkSourceProvider {
         let cached_source = self.shared.content_cache.lock().get(entry_path);
         if let Some(cached_source) = cached_source {
             debug!("Cache hit for JDK source: {}", source_fqn);
-            let temp_file = self
-                .shared
-                .materialized_sources
-                .materialize(cached_source.content().as_bytes(), AttachmentLanguage::Java)?;
+            let temp_file = self.shared.materialized_sources.materialize(
+                cached_source.content().as_bytes(),
+                entry_path,
+                AttachmentLanguage::Java,
+            )?;
 
             return Ok((cached_source, temp_file));
         }
@@ -312,10 +313,11 @@ impl JdkSourceProvider {
         drop(entry);
         drop(archive);
 
-        let temp_file = self
-            .shared
-            .materialized_sources
-            .materialize(content.as_bytes(), AttachmentLanguage::Java)?;
+        let temp_file = self.shared.materialized_sources.materialize(
+            content.as_bytes(),
+            entry_path,
+            AttachmentLanguage::Java,
+        )?;
         let source = Arc::new(SourceFile::new(content));
 
         debug!(

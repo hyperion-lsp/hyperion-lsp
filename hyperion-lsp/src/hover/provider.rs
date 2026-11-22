@@ -476,12 +476,20 @@ impl<'txn> HoverProvider<'txn> {
             // Primary resolution path: FileSemantics (Salsa-cached name resolution)
             // Handles types, methods, fields, enum constants, locals, type params, externals
             if let Some(file_semantics) = file_semantics.as_deref() {
-                if let Some(hover_text) = self.resolve_hover_via_file_semantics(
-                    &token,
-                    snapshot,
-                    file_semantics,
-                    canonical_callable_target,
-                ) {
+                // A use of a lambda parameter written without a type resolves
+                // here to a parameter of unknown type; the inference further
+                // down knows it from the functional interface.
+                let untyped_lambda_parameter =
+                    |text: &String| is_lambda_parameter && text.contains("<unknown>");
+                if let Some(hover_text) = self
+                    .resolve_hover_via_file_semantics(
+                        &token,
+                        snapshot,
+                        file_semantics,
+                        canonical_callable_target,
+                    )
+                    .filter(|text| !untyped_lambda_parameter(text))
+                {
                     if canonical_callable_target.is_some_and(|target| {
                         !self.navigation_provider.workspace_target_is_current(target)
                     }) {
@@ -614,29 +622,21 @@ impl<'txn> HoverProvider<'txn> {
                 }
             }
 
-            // Unresolved identifiers receive syntax-only context. Never attach
-            // metadata from another declaration merely because its name matches.
-            let context_info = self.infer_from_context(&token, &syntax, source_text);
-            let kind_label = match kind {
-                kind if kind.is_identifier() => "Identifier",
-                SyntaxKind::STRING_LITERAL | SyntaxKind::TEXT_BLOCK_LITERAL => "String literal",
-                SyntaxKind::INT_LITERAL | SyntaxKind::LONG_LITERAL => "Integer literal",
-                SyntaxKind::FLOAT_LITERAL | SyntaxKind::DOUBLE_LITERAL => "Float literal",
-                SyntaxKind::CHAR_LITERAL => "Character literal",
-                SyntaxKind::BOOLEAN_LITERAL => "Boolean literal",
-                SyntaxKind::NULL_LITERAL => "null",
-                _ => "Symbol",
+            // Nothing resolved. A declaration still has something to say
+            // (its signature and documentation); anything else has not. A
+            // popup that repeats the token under the cursor ("Identifier
+            // `debug`", "Symbol ` `") is noise, so white space, keywords,
+            // punctuation, literals and unresolved names get no hover. Never
+            // attach metadata from another declaration merely because its
+            // name matches.
+            if !kind.is_identifier() {
+                return Ok(None);
+            }
+            let Some(context_info) = self.infer_from_context(&token, &syntax, source_text) else {
+                return Ok(None);
             };
-            let basic_info = if let Some(ctx) = context_info {
-                format!("**{kind_label}**\n\n{ctx}\n\n`{token_text}`")
-            } else {
-                format!("**{kind_label}**\n\n`{token_text}`")
-            };
-
-            let hover = self.create_hover(basic_info);
-
-            debug!("Returning basic hover information");
-            Ok(Some(hover))
+            debug!("Returning syntax-only hover information");
+            Ok(Some(self.create_hover(context_info)))
         } else {
             debug!("No token found at offset {}", offset);
             Ok(None)
@@ -1131,8 +1131,6 @@ impl<'txn> HoverProvider<'txn> {
                     Some("**Parameter**".to_string())
                 }
             }
-            SyntaxKind::METHOD_CALL_EXPR => Some("**Method call**".to_string()),
-            SyntaxKind::FIELD_ACCESS_EXPR => Some("**Field access**".to_string()),
             SyntaxKind::CLASS_TYPE => {
                 let type_name = token.text();
                 Some(format!("```java\n{type_name}\n```\n\n**Type reference**"))

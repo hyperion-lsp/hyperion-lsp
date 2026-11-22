@@ -673,15 +673,29 @@ fn unresolved_receiver_does_not_fall_back_to_an_unrelated_unique_method() {
     let source = std::fs::read_to_string(&paths[1]).expect("use source");
     let target = source.rfind("target").expect("target call") as u32;
 
-    let hover = get_hover_at_position(
-        &provider,
-        &index,
-        &paths[1],
-        &source,
-        Position::new(0, target),
-    )
-    .expect("basic hover text");
+    let hover_at = |column: u32| {
+        get_hover_at_position(
+            &provider,
+            &index,
+            &paths[1],
+            &source,
+            Position::new(0, column),
+        )
+    };
 
-    assert!(!hover.contains("Distractor"), "{hover}");
-    assert!(!hover.contains("Method defined"), "{hover}");
+    // Nothing is known about the call, so there is nothing to show: not the
+    // unrelated method, and not a popup that only repeats the name.
+    assert_eq!(hover_at(target), None);
+
+    // The same goes for everything that is not a name: a keyword, the blank
+    // after it, a brace.
+    for text in ["package", " p;", "class", "{ void", "void"] {
+        let column = source.find(text).expect(text) as u32;
+        assert_eq!(hover_at(column), None, "hover on {text:?}");
+    }
+
+    // A declaration still describes itself.
+    let declaration = hover_at(source.find("invoke").expect("method name") as u32)
+        .expect("hover on the method declaration");
+    assert!(declaration.contains("invoke"), "{declaration}");
 }
