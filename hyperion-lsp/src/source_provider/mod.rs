@@ -33,7 +33,7 @@ pub(crate) use dependency_archive::{
 pub use jar::JarSourceProvider;
 pub use jdk::JdkSourceProvider;
 pub(crate) use stub::stub_source_content;
-pub use temp_file::MaterializedSourceStore;
+pub use temp_file::{is_materialized_source, MaterializedSourceStore};
 
 use std::collections::HashSet;
 use std::sync::Arc;

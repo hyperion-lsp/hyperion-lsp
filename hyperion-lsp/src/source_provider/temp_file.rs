@@ -36,6 +36,27 @@ const ARCHIVES_DIRECTORY: &str = "archives";
 
 static SESSION_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// Whether `path` is a library source that a Hyperion session wrote out for
+/// an editor to open: an entry of a `-sources` archive or of the JDK's
+/// `src.zip`, or a stub rendered from a class file.
+///
+/// Such a file is read-only text the user cannot fix, so it is not analysed.
+pub fn is_materialized_source(path: &Path) -> bool {
+    static BASES: std::sync::OnceLock<Vec<PathBuf>> = std::sync::OnceLock::new();
+    let bases = BASES.get_or_init(|| {
+        let base = std::env::temp_dir().join(STORE_DIRECTORY);
+        // An editor may send back the resolved form of the path it was given
+        // (`/private/var/...` for `/var/...` on macOS).
+        let resolved = fs::canonicalize(std::env::temp_dir())
+            .map(|temp| temp.join(STORE_DIRECTORY))
+            .ok();
+        let mut bases = vec![base];
+        bases.extend(resolved.filter(|resolved| *resolved != bases[0]));
+        bases
+    });
+    bases.iter().any(|base| path.starts_with(base))
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[repr(u8)]
 pub(super) enum AttachmentLanguage {

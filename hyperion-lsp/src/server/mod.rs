@@ -284,6 +284,9 @@ pub(crate) async fn parse_and_publish_diagnostics_for_uri(
     expected_generation: u64,
     expected_workspace_revision: WorkspaceRevision,
 ) {
+    if is_library_source_uri(uri) {
+        return;
+    }
     let (file_id, source_text, language_id, version, change_version) = {
         let Some(doc_state) = document_map.get(uri) else {
             warn!("Attempted to parse unknown document: {}", uri);
@@ -408,6 +411,15 @@ pub(crate) async fn parse_and_publish_diagnostics_for_uri(
         },
     )
     .await;
+}
+
+/// Library sources opened through go-to-definition are read-only: a warning
+/// about an unused parameter in `java.lang.String` is one nobody can act on.
+fn is_library_source_uri(uri: &str) -> bool {
+    Url::parse(uri)
+        .ok()
+        .and_then(|uri| uri.to_file_path().ok())
+        .is_some_and(|path| crate::source_provider::is_materialized_source(&path))
 }
 
 fn diagnostic_analysis_is_current(

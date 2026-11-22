@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Library sources opened through go-to-definition (an entry of a `-sources`
+  jar or the JDK's `src.zip`, or a stub rendered from a class file) are no
+  longer analysed. They used to fill the editor's problem list with warnings
+  such as "Parameter 'value' is never used" for code the user cannot change.
+
 ## 0.1.1
 
 ### Fixed

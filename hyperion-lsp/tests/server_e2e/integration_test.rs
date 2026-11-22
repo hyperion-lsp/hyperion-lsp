@@ -1119,3 +1119,73 @@ fn diagnostics_of_an_unchanged_document_do_not_flap_when_a_dependency_changes() 
     );
     client.shutdown();
 }
+
+/// A library source opened through go-to-definition is read-only text. The
+/// same file inside the workspace gets its diagnostics, the copy in the
+/// materialized-source store gets none.
+#[test]
+fn library_sources_get_no_diagnostics() {
+    let source =
+        "package lib;\npublic class Broken {\n    public void f() {\n        int x = missingSymbol;\n    }\n}\n";
+    let workspace = TempDir::new().expect("temp workspace");
+    let workspace_path = workspace.path().join("Broken.java");
+    std::fs::write(&workspace_path, source).unwrap();
+
+    let store = std::env::temp_dir().join("hyperion-materialized-sources-v1");
+    std::fs::create_dir_all(&store).unwrap();
+    let session = tempfile::Builder::new()
+        .prefix("session-test-")
+        .tempdir_in(&store)
+        .expect("session directory in the store");
+    let library_path = session.path().join("files").join("Broken.java");
+    std::fs::create_dir_all(library_path.parent().unwrap()).unwrap();
+    std::fs::write(&library_path, source).unwrap();
+
+    let uri_of = |path: &std::path::Path| {
+        tower_lsp::lsp_types::Url::from_file_path(path)
+            .unwrap()
+            .to_string()
+    };
+    let (workspace_uri, library_uri) = (uri_of(&workspace_path), uri_of(&library_path));
+    let root_uri = tower_lsp::lsp_types::Url::from_directory_path(workspace.path())
+        .unwrap()
+        .to_string();
+
+    let client = LSPTestClient::new();
+    client.initialize(&root_uri);
+    client.wait_for_initial_indexing();
+    // The library file first, so its analysis would have run by the time the
+    // workspace file's diagnostics arrive.
+    client.did_open(&library_uri, "java", 1, source);
+    client.did_open(&workspace_uri, "java", 1, source);
+
+    let diagnostics_for = |client: &LSPTestClient, uri: &str| -> usize {
+        client
+            ._notifications
+            .lock()
+            .iter()
+            .filter(|message| {
+                message.get("method").and_then(Value::as_str)
+                    == Some("textDocument/publishDiagnostics")
+                    && message.pointer("/params/uri").and_then(Value::as_str) == Some(uri)
+            })
+            .filter_map(|message| message.pointer("/params/diagnostics")?.as_array())
+            .map(Vec::len)
+            .sum()
+    };
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while diagnostics_for(&client, &workspace_uri) == 0 {
+        assert!(
+            Instant::now() < deadline,
+            "the workspace file never got its unresolved-symbol diagnostic"
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+    thread::sleep(Duration::from_millis(500));
+    assert_eq!(
+        diagnostics_for(&client, &library_uri),
+        0,
+        "a library source was analysed"
+    );
+    client.shutdown();
+}
