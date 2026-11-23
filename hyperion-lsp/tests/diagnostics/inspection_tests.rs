@@ -235,3 +235,122 @@ class Test {
         .expect("the empty catch block is reported");
     assert_eq!(marked(source, empty), "catch (Exception e)");
 }
+
+/// The JDK types the resource-leak fixtures use, so the check can resolve
+/// them and see which are `AutoCloseable`.
+const RESOURCE_TYPES: &str = r"
+package java.lang;
+public interface AutoCloseable { void close() throws Exception; }
+";
+
+fn resource_leaks_in(body: &str) -> Vec<String> {
+    let syntax_source = format!(
+        "import java.io.*;\nimport java.nio.file.*;\nimport java.util.List;\nimport java.util.concurrent.*;\nimport java.util.stream.Stream;\n\nclass Test {{\n    private InputStream kept;\n{body}\n    void consume(InputStream in) {{}}\n}}\n"
+    );
+    let syntax = parse(&syntax_source);
+    let temp_dir = TempDir::new().expect("temp dir");
+    let index = WorkspaceIndex::new(temp_dir.path().to_path_buf());
+    let declare = |fqn: &str, text: String| {
+        let path = temp_dir
+            .path()
+            .join(format!("{}.java", fqn.replace('.', "/")));
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("create package");
+        index
+            .index_file_with_source(&path, &text)
+            .expect("index stub");
+    };
+    declare("java.lang.AutoCloseable", RESOURCE_TYPES.to_string());
+    for (package, name, kind, parent) in [
+        ("java.io", "Closeable", "interface", "extends AutoCloseable"),
+        ("java.io", "InputStream", "class", "implements Closeable"),
+        ("java.io", "FileInputStream", "class", "extends InputStream"),
+        (
+            "java.io",
+            "ByteArrayOutputStream",
+            "class",
+            "implements Closeable",
+        ),
+        ("java.io", "StringWriter", "class", "implements Closeable"),
+        ("java.io", "Reader", "class", "implements Closeable"),
+        ("java.io", "BufferedReader", "class", "extends Reader"),
+        ("java.io", "InputStreamReader", "class", "extends Reader"),
+        (
+            "java.util.stream",
+            "Stream",
+            "interface",
+            "extends AutoCloseable",
+        ),
+        (
+            "java.util.concurrent",
+            "ExecutorService",
+            "interface",
+            "extends AutoCloseable",
+        ),
+    ] {
+        declare(
+            &format!("{package}.{name}"),
+            format!("package {package};\npublic {kind} {name} {parent} {{}}\n"),
+        );
+    }
+    let source_path = temp_dir.path().join("Test.java");
+    index
+        .index_file_with_source(&source_path, &syntax_source)
+        .expect("index source");
+    let file_id = index.get_file_id(&source_path).expect("file id");
+    run_inspections(&syntax, &syntax_source, &index, file_id)
+        .iter()
+        .filter(|d| {
+            d.code
+                == Some(tower_lsp::lsp_types::NumberOrString::String(
+                    "resource_leak".to_string(),
+                ))
+        })
+        .map(|d| marked(&syntax_source, d))
+        .collect()
+}
+
+#[test]
+fn a_resource_opened_and_never_closed_is_reported_on_its_name() {
+    assert_eq!(
+        resource_leaks_in(
+            "    int leaked(Path path) throws IOException {\n        InputStream in = Files.newInputStream(path);\n        return in.read();\n    }\n    int created(File file) throws IOException {\n        FileInputStream stream = new FileInputStream(file);\n        return stream.read();\n    }"
+        ),
+        ["in", "stream"]
+    );
+}
+
+#[test]
+fn a_resource_that_is_closed_or_handed_to_someone_else_is_not_a_leak() {
+    let handled = resource_leaks_in(
+        "    InputStream returned(Path path) throws IOException {\n        InputStream in = Files.newInputStream(path);\n        return in;\n    }\n    void stored(Path path) throws IOException {\n        InputStream in = Files.newInputStream(path);\n        this.kept = in;\n    }\n    void handedOver(Path path) throws IOException {\n        InputStream in = Files.newInputStream(path);\n        consume(in);\n    }\n    void wrapped(Path path) throws IOException {\n        InputStream in = Files.newInputStream(path);\n        BufferedReader reader = new BufferedReader(new InputStreamReader(in));\n        try {\n            reader.read();\n        } finally {\n            reader.close();\n        }\n    }\n    void closedPlainly(Path path) throws IOException {\n        InputStream in = Files.newInputStream(path);\n        in.read();\n        in.close();\n    }\n    void declaredFirst(Path path) throws IOException {\n        InputStream in = Files.newInputStream(path);\n        try (in) {\n            in.read();\n        }\n    }",
+    );
+    assert!(handled.is_empty(), "{handled:?}");
+}
+
+#[test]
+fn a_close_in_one_method_does_not_excuse_a_leak_in_another() {
+    assert_eq!(
+        resource_leaks_in(
+            "    void closes(Path path) throws IOException {\n        InputStream in = Files.newInputStream(path);\n        try {\n            in.read();\n        } finally {\n            in.close();\n        }\n    }\n    int leaks(Path path) throws IOException {\n        InputStream in = Files.newInputStream(path);\n        return in.read();\n    }"
+        ),
+        ["in"]
+    );
+}
+
+#[test]
+fn buffers_pipelines_and_executors_have_nothing_to_release() {
+    let quiet = resource_leaks_in(
+        "    long streams(List<String> names) {\n        Stream<String> upper = names.stream().map(String::toUpperCase);\n        return upper.count();\n    }\n    String memory() {\n        ByteArrayOutputStream out = new ByteArrayOutputStream();\n        StringWriter text = new StringWriter();\n        return out.toString() + text;\n    }\n    void pool() {\n        ExecutorService pool = Executors.newFixedThreadPool(2);\n        pool.shutdown();\n    }",
+    );
+    assert!(quiet.is_empty(), "{quiet:?}");
+}
+
+#[test]
+fn a_stream_over_a_directory_or_file_must_be_closed() {
+    assert_eq!(
+        resource_leaks_in(
+            "    long lines(Path path) throws IOException {\n        Stream<String> lines = Files.lines(path);\n        return lines.count();\n    }"
+        ),
+        ["lines"]
+    );
+}

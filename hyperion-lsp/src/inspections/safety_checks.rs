@@ -14,7 +14,98 @@ use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString};
 // Resource Leak Inspection
 // ============================================================================
 
-/// Check for resource leaks - Closeable/AutoCloseable not in try-with-resources
+/// Types that implement `AutoCloseable` but hold nothing that must be
+/// released: in-memory buffers, whose `close` does nothing, and executors and
+/// HTTP clients, which gained `close` in recent Java versions and live as long
+/// as the application does.
+const NOTHING_TO_RELEASE: &[&str] = &[
+    "java.io.ByteArrayInputStream",
+    "java.io.ByteArrayOutputStream",
+    "java.io.CharArrayReader",
+    "java.io.CharArrayWriter",
+    "java.io.StringReader",
+    "java.io.StringWriter",
+    "java.net.http.HttpClient",
+    "java.util.concurrent.ExecutorService",
+    "java.util.concurrent.ForkJoinPool",
+    "java.util.concurrent.ScheduledExecutorService",
+    "java.util.concurrent.ScheduledThreadPoolExecutor",
+    "java.util.concurrent.ThreadPoolExecutor",
+];
+
+/// The `java.nio.file.Files` methods whose stream holds an open directory or
+/// file. Every other stream is a pipeline over memory, and closing it is
+/// optional.
+const STREAMS_OVER_FILES: &[&str] = &["Files.lines(", "Files.list(", "Files.walk(", "Files.find("];
+
+/// Whether a local of this type, initialized this way, has to be closed.
+fn must_be_closed(type_fqn: &str, declaration: &SyntaxNode) -> bool {
+    if NOTHING_TO_RELEASE.contains(&type_fqn) {
+        return false;
+    }
+    if type_fqn.starts_with("java.util.stream.") {
+        let text: String = declaration.text().to_string().split_whitespace().collect();
+        return STREAMS_OVER_FILES
+            .iter()
+            .any(|opener| text.contains(opener));
+    }
+    true
+}
+
+/// The method, constructor, initializer or lambda a declaration belongs to.
+fn enclosing_body(node: &SyntaxNode) -> Option<SyntaxNode> {
+    node.ancestors().skip(1).find(|ancestor| {
+        matches!(
+            ancestor.kind(),
+            SyntaxKind::METHOD_DECL
+                | SyntaxKind::CONSTRUCTOR_DECL
+                | SyntaxKind::LAMBDA_EXPR
+                | SyntaxKind::STATIC_INIT
+                | SyntaxKind::INSTANCE_INIT
+        )
+    })
+}
+
+/// Whether the code after a resource's declaration closes it or hands it to
+/// someone else: `name.close()`, a use as a whole argument (any method or
+/// constructor may close what it is given, or keep it), `return name;`, an
+/// assignment of it to something else, or try-with-resources on the variable.
+/// In those cases the declaration is not a leak this check can prove.
+fn is_closed_or_handed_over(declaration: &SyntaxNode, var_name: &str) -> bool {
+    let Some(body) = enclosing_body(declaration) else {
+        // No body to look at: say nothing rather than guess.
+        return true;
+    };
+    let after = declaration.text_range().end();
+    let tokens: Vec<_> = body
+        .descendants_with_tokens()
+        .filter_map(rowan::NodeOrToken::into_token)
+        .filter(|token| !token.kind().is_trivia() && token.text_range().start() >= after)
+        .collect();
+    let text = |index: Option<usize>| index.and_then(|index| tokens.get(index)).map(|t| t.text());
+
+    tokens.iter().enumerate().any(|(index, token)| {
+        if token.kind() != SyntaxKind::IDENT || token.text() != var_name {
+            return false;
+        }
+        let previous = text(index.checked_sub(1));
+        let next = text(Some(index + 1));
+        let closed = next == Some(".")
+            && text(Some(index + 2)) == Some("close")
+            && text(Some(index + 3)) == Some("(");
+        // `f(name)`, `f(a, name)`, `try (name)`, `try (name; other)`.
+        let handed_over =
+            matches!(previous, Some("(" | ",")) && matches!(next, Some(")" | "," | ";"));
+        // `try (other; name)`.
+        let listed_resource = previous == Some(";") && next == Some(")");
+        let returned = previous == Some("return") && next == Some(";");
+        let assigned_away = previous == Some("=") && matches!(next, Some(";" | ")" | ","));
+        closed || handed_over || listed_resource || returned || assigned_away
+    })
+}
+
+/// Check for resource leaks: a local `AutoCloseable` that is opened in a
+/// method and neither closed there nor handed to anyone else.
 pub(crate) fn check_resource_leaks(
     syntax: &SyntaxNode,
     source_text: &str,
@@ -47,24 +138,23 @@ pub(crate) fn check_resource_leaks(
             continue;
         };
 
-        if !implements_auto_closeable(workspace_index, &type_fqn) {
+        if !implements_auto_closeable(workspace_index, &type_fqn)
+            || !must_be_closed(&type_fqn, &node)
+        {
             continue;
         }
 
-        // Extract variable name for the diagnostic message
-        let var_name = extract_var_name(&node);
-        let var_name = var_name.as_deref().unwrap_or("resource");
+        let Some(name_token) = var_name_token(&node) else {
+            continue;
+        };
+        let var_name = name_token.text();
+        if is_closed_or_handed_over(&node, var_name) {
+            continue;
+        }
         let display_type = simple_type_name(&type_fqn);
 
-        // Check if there's a try-finally with close() nearby
-        // (simple heuristic: check if the containing method has try-finally)
-        if has_try_finally_with_close(syntax, var_name) {
-            continue;
-        }
-
-        // Report the resource leak
-        let range = node.text_range();
-        let lsp_range = text_range_to_lsp_range(range, source_text);
+        // Mark the variable, not the statement that declares it.
+        let lsp_range = text_range_to_lsp_range(name_token.text_range(), source_text);
 
         diagnostics.push(Diagnostic {
             range: lsp_range,
@@ -162,8 +252,8 @@ fn extract_qualified_name_from_type(type_node: &SyntaxNode) -> Option<String> {
     None
 }
 
-/// Extract variable name from LOCAL_VAR_DECL
-fn extract_var_name(node: &SyntaxNode) -> Option<String> {
+/// The name token of the variable a LOCAL_VAR_DECL declares
+fn var_name_token(node: &SyntaxNode) -> Option<hyperion_parser::SyntaxToken> {
     let mut found_type = false;
     for child in node.children_with_tokens() {
         match child.kind() {
@@ -175,9 +265,7 @@ fn extract_var_name(node: &SyntaxNode) -> Option<String> {
             }
             SyntaxKind::EQ => break,
             SyntaxKind::IDENT if found_type => {
-                if let Some(token) = child.as_token() {
-                    return Some(token.text().to_string());
-                }
+                return child.into_token();
             }
             _ => {}
         }
@@ -185,7 +273,6 @@ fn extract_var_name(node: &SyntaxNode) -> Option<String> {
     None
 }
 
-/// Resolve a type name to a single FQN using imports/workspace context.
 fn resolve_type_fqn(
     type_name: &str,
     resolver: &ImportResolver<'_>,
@@ -234,43 +321,6 @@ fn implements_auto_closeable(workspace_index: &WorkspaceIndex, type_fqn: &str) -
 
 fn simple_type_name(type_fqn: &str) -> String {
     type_fqn.rsplit('.').next().unwrap_or(type_fqn).to_string()
-}
-
-/// Check if the containing scope has a try-finally block that closes the variable
-fn has_try_finally_with_close(syntax: &SyntaxNode, var_name: &str) -> bool {
-    // Look for TRY_STMT nodes that have a FINALLY_CLAUSE
-    for node in syntax.descendants() {
-        if node.kind() == SyntaxKind::TRY_STMT {
-            // Check if it has a finally clause
-            let has_finally = node
-                .children()
-                .any(|c| c.kind() == SyntaxKind::FINALLY_CLAUSE);
-            if !has_finally {
-                continue;
-            }
-
-            // Check if the finally clause calls close() on our variable
-            for finally in node
-                .children()
-                .filter(|c| c.kind() == SyntaxKind::FINALLY_CLAUSE)
-            {
-                let finally_text = finally.text().to_string();
-                // Simple heuristic: check if the text contains "varName.close()"
-                if finally_text.contains(&format!("{var_name}.close()")) {
-                    return true;
-                }
-                // Also check for IOUtils.closeQuietly or similar
-                if finally_text.contains(var_name)
-                    && (finally_text.contains("closeQuietly")
-                        || finally_text.contains("close(")
-                        || finally_text.contains("IOUtils"))
-                {
-                    return true;
-                }
-            }
-        }
-    }
-    false
 }
 
 // ============================================================================
