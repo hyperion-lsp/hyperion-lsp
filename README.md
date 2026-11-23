@@ -7,7 +7,7 @@ Gradle*, holds Java and Kotlin in a single shared symbol index, and carries its
 own JVM bytecode interpreter — which is how it reads Gradle plugin bytecode,
 and how it runs your `main` method without starting a JVM.
 
-> **Status: development release, v0.1.1.** Java is usable for day-to-day work.
+> **Status: development release, v0.1.2.** Java is usable for day-to-day work.
 > Kotlin is behind it and you will notice. Prebuilt binaries exist for Linux
 > and macOS, but there is no documented third-party production deployment yet.
 > [What works today](#what-works-today) is deliberately blunt — read it before
