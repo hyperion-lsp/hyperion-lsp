@@ -266,8 +266,11 @@ impl SourceArchive {
         };
         let cached_source = content_cache.lock().get(&cache_key);
         if let Some(source) = cached_source {
-            let temp_file = materialized_sources
-                .materialize(source.content().as_bytes(), AttachmentLanguage::Java)?;
+            let temp_file = materialized_sources.materialize(
+                source.content().as_bytes(),
+                entry_path,
+                AttachmentLanguage::Java,
+            )?;
             return Ok(SourceContent::Archive {
                 source,
                 archive_path: self.path.clone(),
@@ -284,8 +287,11 @@ impl SourceArchive {
         let declared_size = entry.size();
         let content: Arc<str> = read_source(&mut entry, declared_size, entry_path)?.into();
         drop(entry);
-        let temp_file =
-            materialized_sources.materialize(content.as_bytes(), AttachmentLanguage::Java)?;
+        let temp_file = materialized_sources.materialize(
+            content.as_bytes(),
+            entry_path,
+            AttachmentLanguage::Java,
+        )?;
         let source = Arc::new(SourceFile::new(content));
         content_cache.lock().insert(cache_key, Arc::clone(&source));
 

@@ -88,10 +88,34 @@ impl Default for MaterializedSourceLimits {
     }
 }
 
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+#[derive(Clone, Eq, Hash, PartialEq)]
 struct MaterializedSourceKey {
     digest: [u8; 32],
     language: AttachmentLanguage,
+    /// The file name an editor shows for the source, without its extension.
+    stem: Box<str>,
+}
+
+/// Longest file stem taken from a caller's name; longer ones are cut.
+const MAX_STEM_CHARS: usize = 96;
+
+/// The file stem for a source named `name`: the last path segment without
+/// its extension (`ConcurrentHashMap` for
+/// `java/util/concurrent/ConcurrentHashMap.java`), reduced to characters
+/// that are safe in a file name on every platform.
+fn file_stem(name: &str) -> Box<str> {
+    let last = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    let stem = last.rsplit_once('.').map_or(last, |(stem, _)| stem);
+    let stem: String = stem
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '$' | '-'))
+        .take(MAX_STEM_CHARS)
+        .collect();
+    if stem.is_empty() {
+        "Source".into()
+    } else {
+        stem.into()
+    }
 }
 
 #[derive(Default)]
@@ -264,12 +288,16 @@ impl MaterializedSourceStore {
         })
     }
 
+    /// Write `content` out and return its path. `name` (a class name or an
+    /// archive entry path) decides the file name an editor shows:
+    /// `<digest>/ConcurrentHashMap.java`.
     pub(super) fn materialize(
         &self,
         content: &[u8],
+        name: &str,
         language: AttachmentLanguage,
     ) -> Result<PathBuf, String> {
-        self.materialize_inner(content, language)
+        self.materialize_inner(content, name, language)
             .map_err(|error| error.to_string())
     }
 
@@ -291,6 +319,7 @@ impl MaterializedSourceStore {
     fn materialize_inner(
         &self,
         content: &[u8],
+        name: &str,
         language: AttachmentLanguage,
     ) -> Result<PathBuf, MaterializationError> {
         let root = self.root.as_ref().ok_or_else(|| {
@@ -315,8 +344,9 @@ impl MaterializedSourceStore {
         let key = MaterializedSourceKey {
             digest: Sha256::digest(content).into(),
             language,
+            stem: file_stem(name),
         };
-        let destination = materialized_path(root, key);
+        let destination = materialized_path(root, &key);
         // Source lookups are synchronous today. One store mutex deliberately
         // serializes verification, reservation, and atomic publication so no
         // caller can observe a path whose bytes or accounting are provisional.
@@ -394,12 +424,12 @@ impl Drop for MaterializedSourceStore {
     }
 }
 
-fn materialized_path(root: &Path, key: MaterializedSourceKey) -> PathBuf {
-    root.join(FILES_DIRECTORY).join(format!(
-        "{}.{}",
-        hex::encode(key.digest),
-        key.language.extension()
-    ))
+/// `files/<digest>/<stem>.<extension>`: the digest keeps sources apart, the
+/// file name is what an editor shows in its tab and status line.
+fn materialized_path(root: &Path, key: &MaterializedSourceKey) -> PathBuf {
+    root.join(FILES_DIRECTORY)
+        .join(hex::encode(key.digest))
+        .join(format!("{}.{}", key.stem, key.language.extension()))
 }
 
 fn file_matches(path: &Path, expected: &[u8]) -> io::Result<bool> {
@@ -446,6 +476,12 @@ fn publish_atomically(
     staged_file.write_all(content)?;
     staged_file.sync_all()?;
     drop(staged.file.take());
+    if let Some(directory) = destination.parent() {
+        match create_restricted_leaf_directory(directory) {
+            Err(error) if error.kind() != io::ErrorKind::AlreadyExists => return Err(error),
+            _ => {}
+        }
+    }
     rename_replacing(&staged.path, destination)?;
     staged.published = true;
     Ok(())
@@ -660,11 +696,13 @@ mod tests {
     fn quota_refusal_does_not_grow_files_or_accounting() {
         let temp = tempfile::tempdir().unwrap();
         let store = test_store(temp.path(), 3, 1, 3);
-        let first = store.materialize(b"abc", AttachmentLanguage::Java).unwrap();
+        let first = store
+            .materialize(b"abc", "pkg/Sample.java", AttachmentLanguage::Java)
+            .unwrap();
         let entries_before = fs::read_dir(first.parent().unwrap()).unwrap().count();
 
         let error = store
-            .materialize(b"d", AttachmentLanguage::Java)
+            .materialize(b"d", "pkg/Sample.java", AttachmentLanguage::Java)
             .unwrap_err();
         assert!(error.contains("quota exhausted"));
         assert_eq!(store.usage(), (3, 1));
@@ -680,7 +718,7 @@ mod tests {
         let store = test_store(temp.path(), 100, 10, 3);
 
         let error = store
-            .materialize(b"four", AttachmentLanguage::Java)
+            .materialize(b"four", "pkg/Sample.java", AttachmentLanguage::Java)
             .unwrap_err();
 
         assert!(error.contains("maximum 3"));
@@ -700,7 +738,11 @@ mod tests {
         fs::remove_dir(store.root().join(FILES_DIRECTORY)).unwrap();
 
         assert!(store
-            .materialize(b"class MissingParent {}", AttachmentLanguage::Java)
+            .materialize(
+                b"class MissingParent {}",
+                "pkg/Sample.java",
+                AttachmentLanguage::Java
+            )
             .is_err());
         assert_eq!(store.usage(), (0, 0));
         assert!(fs::read_dir(store.root()).unwrap().all(|entry| !entry
@@ -732,10 +774,18 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let store = test_store(temp.path(), 100, 10, 100);
         let first = store
-            .materialize(b"class Same {}", AttachmentLanguage::Java)
+            .materialize(
+                b"class Same {}",
+                "pkg/Sample.java",
+                AttachmentLanguage::Java,
+            )
             .unwrap();
         let second = store
-            .materialize(b"class Same {}", AttachmentLanguage::Java)
+            .materialize(
+                b"class Same {}",
+                "pkg/Sample.java",
+                AttachmentLanguage::Java,
+            )
             .unwrap();
 
         assert_eq!(first, second);
@@ -748,13 +798,13 @@ mod tests {
         let store = test_store(temp.path(), 100, 3, 100);
         let expected = b"class Original {}";
         let path = store
-            .materialize(expected, AttachmentLanguage::Java)
+            .materialize(expected, "pkg/Sample.java", AttachmentLanguage::Java)
             .unwrap();
         fs::write(&path, b"class Replaced {} with extra bytes").unwrap();
 
         assert_eq!(
             store
-                .materialize(expected, AttachmentLanguage::Java)
+                .materialize(expected, "pkg/Sample.java", AttachmentLanguage::Java)
                 .unwrap(),
             path
         );
@@ -769,7 +819,11 @@ mod tests {
             let store = test_store(temp.path(), 100, 10, 100);
             let root = store.root().to_path_buf();
             store
-                .materialize(b"class Gone {}", AttachmentLanguage::Java)
+                .materialize(
+                    b"class Gone {}",
+                    "pkg/Sample.java",
+                    AttachmentLanguage::Java,
+                )
                 .unwrap();
             assert!(root.is_dir());
             root
@@ -805,9 +859,43 @@ mod tests {
     }
 
     #[test]
+    fn a_source_is_named_after_its_class() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = test_store(temp.path(), 100, 10, 100);
+        let path = store
+            .materialize(
+                b"class A {}",
+                "java/util/concurrent/ConcurrentHashMap.java",
+                AttachmentLanguage::Java,
+            )
+            .unwrap();
+        assert_eq!(path.file_name().unwrap(), "ConcurrentHashMap.java");
+        // The digest directory keeps two classes of one name apart.
+        let other = store
+            .materialize(
+                b"class B {}",
+                "other/ConcurrentHashMap.java",
+                AttachmentLanguage::Java,
+            )
+            .unwrap();
+        assert_ne!(path, other);
+        assert_eq!(fs::read(&path).unwrap(), b"class A {}");
+
+        assert_eq!(&*file_stem("java/util/Map"), "Map");
+        assert_eq!(&*file_stem("java/util/Map$Entry.java"), "Map$Entry");
+        // Nothing that could leave the directory or name a device.
+        assert_eq!(&*file_stem("../../etc/passwd"), "passwd");
+        assert_eq!(&*file_stem("a/..\\..\\x:y*.java"), "xy");
+        assert_eq!(&*file_stem("/"), "Source");
+        assert_eq!(file_stem(&"a".repeat(500)).len(), MAX_STEM_CHARS);
+    }
+
+    #[test]
     fn materialized_store_representation_and_limits_stay_compact_and_bounded() {
         assert_eq!(std::mem::size_of::<AttachmentLanguage>(), 1);
-        assert!(std::mem::size_of::<MaterializedSourceKey>() <= 33);
+        // A digest, the language and a boxed file stem of at most
+        // `MAX_STEM_CHARS` ASCII characters.
+        assert!(std::mem::size_of::<MaterializedSourceKey>() <= 56);
         assert!(std::mem::size_of::<MaterializedSourceLimits>() <= 24);
         assert_eq!(DEFAULT_MAX_BYTES, 256 * 1024 * 1024);
         assert_eq!(DEFAULT_MAX_FILES, 4_096);

@@ -261,6 +261,22 @@ impl ChainResolver {
             let symbol_data = resolver.symbol_table().get_symbol(symbol.symbol_id);
 
             if let Some(sym) = symbol_data {
+                // A lambda parameter written without a type (`user ->`) has
+                // none in the symbol table; it comes from the functional
+                // interface the lambda is passed to.
+                if matches!(sym.type_info, hyperion_semantics::symbol::Type::Unknown) {
+                    if let Some(inferred) =
+                        crate::navigation::lambda_inference::infer_lambda_parameter_type_with_workspace_and_file(
+                            root,
+                            name,
+                            offset,
+                            Some(self.workspace_index.clone()),
+                            file_id,
+                        )
+                    {
+                        return self.type_to_type_info(file_id, &inferred);
+                    }
+                }
                 // Convert semantic Type to TypeInfo
                 return self.type_to_type_info(file_id, &sym.type_info);
             }

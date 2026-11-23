@@ -2,7 +2,24 @@
 
 ## Unreleased
 
+### Changed
+
+- A library source opened through go-to-definition is a file named after its
+  class (`…/ConcurrentHashMap.java`), not after a 64-character digest, so the
+  editor's tab, status line and reference list are readable.
+- Server logs older than a week are removed from the log directory at
+  startup. Every start used to leave `hyperion-lsp-<pid>.log` behind for good.
+
 ### Fixed
+
+- **Hover showed popups with nothing in them.** White space, keywords, empty
+  lines and string literals answered "Symbol", and a call that could not be
+  resolved answered "Identifier / Method call" followed by its own name. These
+  now have no hover. Declarations still describe themselves.
+- **Hover on a method called on a lambda parameter** (`user -> user.getName()`)
+  found nothing when the parameter had no written type, and a use of such a
+  parameter showed `<unknown> user`. Both now use the type inferred from the
+  functional interface.
 
 - Library sources opened through go-to-definition (an entry of a `-sources`
   jar or the JDK's `src.zip`, or a stub rendered from a class file) are no

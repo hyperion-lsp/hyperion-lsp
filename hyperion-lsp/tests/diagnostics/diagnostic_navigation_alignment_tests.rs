@@ -110,13 +110,12 @@ fn unresolved_value_does_not_bind_to_sibling_type_member() {
         .goto_definition("com/example/Main.java", "<|>")
         .expect("goto definition")
         .is_none());
-    let hover = test
+    // An unresolved name has nothing to show: not the unrelated field, and
+    // not a popup that only repeats the name.
+    assert!(test
         .hover("com/example/Main.java", "<|>")
         .expect("hover")
-        .expect("syntax-only hover remains available for an unresolved identifier");
-    let hover_text = crate::lsp_test_framework::hover_to_text(&hover);
-    assert!(!hover_text.contains("Unrelated"), "{hover_text}");
-    assert!(!hover_text.contains("**Field**"), "{hover_text}");
+        .is_none());
     assert!(test
         .find_references("com/example/Main.java", "<|>", true)
         .expect("find references")

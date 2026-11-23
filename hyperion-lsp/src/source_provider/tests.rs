@@ -580,7 +580,11 @@ impl SourceProvider for MaterializingProvider {
         (request.fqn() == "external.Persistent").then(|| SourceContent::Stub {
             temp_file: self
                 .store
-                .materialize(self.source.content().as_bytes(), AttachmentLanguage::Java)
+                .materialize(
+                    self.source.content().as_bytes(),
+                    "pkg/Sample.java",
+                    AttachmentLanguage::Java,
+                )
                 .expect("materialize test source"),
             source: Arc::clone(&self.source),
         })
