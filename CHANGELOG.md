@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.1.3
+
+### Changed
+
+- **A finding about a class or a method marks its name, not the whole
+  declaration.** Security findings such as "IDOR review required" or
+  "insufficient logging" reported the class or method as their range, so an
+  editor underlined every line of it, up to a few hundred. Any other finding
+  that runs over several lines marks its first line. Hover and code actions
+  for such a finding answer on the marked range only, no longer everywhere
+  inside the class.
+- The "should be managed with try-with-resources" warning is reported only
+  for a resource that is opened in a method and neither closed there nor
+  handed to anyone else. It used to fire for every local of an
+  `AutoCloseable` type: every `Stream` pipeline, `ByteArrayOutputStream`,
+  `StringWriter` and `ExecutorService`. A resource that is returned, stored,
+  passed to a method or constructor, or closed with `close()` is not
+  reported. A stream from `Files.lines`, `list`, `walk` or `find` still is.
+  The warning marks the variable's name.
+
+### Fixed
+
+- **A file opened at startup showed errors that were not there.** For the
+  first seconds of a session, until the JDK and the build's dependencies were
+  loaded, every open file got errors such as "cannot find symbol: List" for
+  `java.util` and library types, and then lost them again. Diagnostics that
+  need those libraries now wait for them. Until then a file shows its syntax
+  errors only, and the full set arrives once the JDK and the dependencies have
+  loaded, or have failed to. If a build tool hangs, analysis starts after
+  three minutes anyway.
+- **A logger used in `catch (Exception e)` was reported as possibly null.**
+  `log.error(…)` in a handler got "Variable 'log' may be null when
+  dereferenced" whenever the `try` block also used `log`. A value of unknown
+  nullness is no longer assumed null because dereferencing it could have
+  thrown.
+- The resource warning skipped a variable whenever any `finally` block in the
+  file mentioned its name next to a close call, so one closed stream named
+  `in` hid every leaked `in` in the file.
+- `Math.random()` inside a string or text block, such as a JavaScript snippet
+  the Java code serves, was reported as an insecure random number generator.
+- The missing-`@Override` warning marked the 20 bytes after the start of the
+  method, which is its Javadoc when it has one. It marks the method name.
+- The empty-catch warning marks `catch (…)`, not the clause and its block.
+
 ## 0.1.2
 
 ### Changed
