@@ -25,7 +25,7 @@ members = [
 exclude = ["vendor/tower-lsp", "vendor/tower-lsp/tower-lsp-macros"]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 authors = ["Project Hyperion Contributors"]
 # Must match LICENSE and the per-file SPDX headers.
