@@ -81,9 +81,16 @@ async fn rootless_initialization_enables_analysis_and_background_indexing() {
         .await
         .expect("didOpen dispatch");
 
-    let deadline = Instant::now() + Duration::from_secs(5);
+    // Sibling indexing must start at once. Semantic diagnostics wait for the
+    // startup JDK load to settle (they would otherwise report every JDK type
+    // as missing), so they get a deadline sized for JDK indexing and must
+    // follow the JDK's outcome message.
+    let started = Instant::now();
+    let sibling_deadline = started + Duration::from_secs(5);
+    let deadline = started + Duration::from_secs(120);
     let mut request_id = 2;
     let mut found_sibling = false;
+    let mut sibling_in_time = false;
     let mut found_semantic_diagnostic = false;
     while Instant::now() < deadline {
         let response = service
@@ -105,6 +112,9 @@ async fn rootless_initialization_enables_analysis_and_background_indexing() {
                     .any(|symbol| symbol.get("name") == Some(&json!("RootlessSibling")))
             })
         });
+        if found_sibling && !sibling_in_time {
+            sibling_in_time = Instant::now() <= sibling_deadline;
+        }
         if found_sibling {
             found_semantic_diagnostic = messages.lock().await.iter().any(|request| {
                 request.method() == "textDocument/publishDiagnostics"
@@ -139,10 +149,39 @@ async fn rootless_initialization_enables_analysis_and_background_indexing() {
     );
     assert!(
         found_semantic_diagnostic,
-        "no-root didOpen must publish semantic diagnostics immediately; messages: {captured:?}"
+        "no-root didOpen must publish semantic diagnostics once the JDK settles; messages: {captured:?}"
+    );
+    let position = |matches: &dyn Fn(&Request) -> bool| captured.iter().position(matches);
+    let jdk_settled = position(&|request| {
+        request.method() == "window/logMessage"
+            && request
+                .params()
+                .and_then(|params| params.get("message"))
+                .and_then(Value::as_str)
+                .is_some_and(|message| {
+                    message.starts_with("✓ JDK stdlib indexed") || message.starts_with("⚠ JDK")
+                })
+    })
+    .expect("the JDK load never reported its outcome");
+    let first_semantic = position(&|request| {
+        request.method() == "textDocument/publishDiagnostics"
+            && request
+                .params()
+                .and_then(|params| params.get("diagnostics"))
+                .and_then(Value::as_array)
+                .is_some_and(|diagnostics| {
+                    diagnostics.iter().any(|diagnostic| {
+                        diagnostic.get("code") == Some(&json!("undefined-symbol"))
+                    })
+                })
+    })
+    .expect("semantic diagnostic was seen above");
+    assert!(
+        jdk_settled < first_semantic,
+        "semantic diagnostics were published before the JDK load settled; messages: {captured:?}"
     );
     assert!(
-        found_sibling,
+        found_sibling && sibling_in_time,
         "no-root didOpen must schedule source-root indexing before an interactive request"
     );
 }

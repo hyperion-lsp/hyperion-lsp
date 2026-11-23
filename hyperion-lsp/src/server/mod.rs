@@ -96,6 +96,7 @@ mod misc;
 mod navigation;
 mod refactoring;
 pub(crate) mod source_indexing;
+mod startup_libraries;
 mod state;
 pub(crate) use state::{
     DestructiveRefactoringReadiness, RefactoringIndexComponent, RefactoringReadinessTicket,
@@ -103,6 +104,9 @@ pub(crate) use state::{
 };
 mod symbols;
 
+pub(crate) use startup_libraries::{
+    spawn_settlement_republish, StartupLibraryGate, StartupLibraryHold, STARTUP_LIBRARY_DEADLINE,
+};
 pub use state::{Backend, DocumentState};
 use state::{
     BackgroundTasks, DiagnosticAnalysisTicket, DiagnosticPublicationState, DocumentStore,
@@ -246,6 +250,7 @@ impl Backend {
                 source_root_gates: DashMap::new(),
                 ready: Arc::new(AtomicBool::new(false)),
                 destructive_refactoring: Arc::new(DestructiveRefactoringReadiness::new()),
+                startup_libraries: Arc::new(StartupLibraryGate::new()),
                 diagnostic_options: Arc::new(RwLock::new(
                     crate::diagnostic_engine::DiagnosticOptions::default(),
                 )),
@@ -280,6 +285,7 @@ pub(crate) async fn parse_and_publish_diagnostics_for_uri(
     security_provider: Option<&Arc<crate::security_diagnostics::SecurityDiagnosticsProvider>>,
     diagnostic_options: crate::diagnostic_engine::DiagnosticOptions,
     workspace_ready: Option<&Arc<AtomicBool>>,
+    startup_libraries: Option<&StartupLibraryGate>,
     diagnostic_publication: &Arc<DiagnosticPublicationState>,
     expected_generation: u64,
     expected_workspace_revision: WorkspaceRevision,
@@ -325,6 +331,16 @@ pub(crate) async fn parse_and_publish_diagnostics_for_uri(
     };
 
     let is_workspace_ready = workspace_ready.is_none_or(|ready| ready.load(Ordering::SeqCst));
+    // Unresolved-symbol, type, nullability, lint and security results all
+    // resolve against the JDK and the build dependencies. Until the startup
+    // loads of those have settled they would report every library type as
+    // missing, so only parse errors are published; the settlement republishes
+    // every open document with the full set.
+    let libraries_settled = startup_libraries.is_none_or(StartupLibraryGate::is_settled);
+    let mut diagnostic_options = diagnostic_options;
+    if !libraries_settled {
+        diagnostic_options.run_security = false;
+    }
 
     // Phased publishing: each publish replaces the previous set for this URI.
     // Phase 1 (~1ms) delivers parse errors instantly, then phases 2-3 follow.
@@ -356,7 +372,7 @@ pub(crate) async fn parse_and_publish_diagnostics_for_uri(
         &source_text,
         host,
         security_provider,
-        is_workspace_ready,
+        is_workspace_ready && libraries_settled,
         diagnostic_options,
         is_current,
         move |diagnostics| {

@@ -118,6 +118,17 @@ pub(crate) async fn handle_initialized(
     let index_publication = invalidation_runtime.clone();
     let destructive_readiness = Arc::clone(&index_publication.destructive_refactoring);
 
+    // Symbol-dependent diagnostics wait until the JDK and build-dependency
+    // loads below have settled. This registration hold keeps the gate closed
+    // while those loads take their own holds; it is dropped on return, and
+    // each load's hold is dropped when its task ends however it ends.
+    let startup_libraries = Arc::clone(&index_publication.startup_libraries);
+    let _startup_registration = startup_libraries.hold();
+    crate::server::spawn_settlement_republish(
+        index_publication.clone(),
+        crate::server::STARTUP_LIBRARY_DEADLINE,
+    );
+
     let Some(root) = workspace_root else {
         client
             .log_message(
@@ -151,6 +162,7 @@ pub(crate) async fn handle_initialized(
             client_supports_progress,
             jdk,
             source_providers,
+            startup_libraries.hold(),
         );
         return;
     };
@@ -181,10 +193,12 @@ pub(crate) async fn handle_initialized(
         client_supports_progress,
         jdk,
         Arc::clone(&source_providers),
+        startup_libraries.hold(),
     );
 
     crate::handlers::build_system::spawn_initial_build_refresh(
         index_publication,
+        startup_libraries.hold(),
         crate::handlers::build_system::BuildProgressInputs {
             root: root.clone(),
             supports_progress: client_supports_progress,
@@ -759,11 +773,15 @@ fn spawn_jdk_indexing(
     supports_progress: bool,
     readiness_ticket: crate::server::RefactoringReadinessTicket,
     source_providers: Arc<crate::source_provider::SourceProviderChain>,
+    startup_library_hold: Option<crate::server::StartupLibraryHold>,
 ) {
     tokio::spawn(async move {
         use crate::progress::ProgressReporter;
         use std::time::Instant;
 
+        // Settles this JDK load for the diagnostic gate when the task ends,
+        // on success, an unavailable or partial JDK, an error or a panic.
+        let _startup_library_hold = startup_library_hold;
         let _workspace_index = Arc::clone(publication.host.index());
         let mut readiness = RefactoringReadinessCompletion::new(
             Arc::clone(&publication.destructive_refactoring),

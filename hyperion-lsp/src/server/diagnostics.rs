@@ -46,6 +46,7 @@ pub struct InvalidationRuntime {
         Arc<parking_lot::RwLock<crate::diagnostic_engine::DiagnosticOptions>>,
     pub(crate) workspace_ready: Arc<std::sync::atomic::AtomicBool>,
     pub(crate) destructive_refactoring: Arc<crate::server::DestructiveRefactoringReadiness>,
+    pub(crate) startup_libraries: Arc<crate::server::StartupLibraryGate>,
     pub(crate) diagnostic_publication: Arc<DiagnosticPublicationState>,
 }
 
@@ -83,6 +84,7 @@ impl InvalidationRuntime {
             )),
             workspace_ready: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             destructive_refactoring: Arc::new(crate::server::DestructiveRefactoringReadiness::new()),
+            startup_libraries: Arc::new(crate::server::StartupLibraryGate::settled()),
             diagnostic_publication: Arc::new(DiagnosticPublicationState::new()),
         }
     }
@@ -127,7 +129,9 @@ impl InvalidationRuntime {
                 })
                 .collect();
 
-            if !self.workspace_ready.load(Ordering::Acquire) {
+            // SeqCst pairs with the startup-library settlement: whichever of
+            // the two flips last sees the other and publishes the full set.
+            if !self.workspace_ready.load(Ordering::SeqCst) {
                 debug!(
                     "Published {source} index revision; diagnostics wait for workspace readiness"
                 );
@@ -148,6 +152,7 @@ impl InvalidationRuntime {
                     Some(&self.security_provider),
                     diagnostic_options,
                     Some(&self.workspace_ready),
+                    Some(&self.startup_libraries),
                     &self.diagnostic_publication,
                     generation,
                     workspace_revision,
@@ -379,6 +384,7 @@ impl InvalidationRuntime {
                 Some(&self.security_provider),
                 diagnostic_options,
                 Some(&self.workspace_ready),
+                Some(&self.startup_libraries),
                 &self.diagnostic_publication,
                 generation,
                 workspace_revision,
@@ -622,6 +628,7 @@ impl Backend {
             diagnostic_options: Arc::clone(&self.workspace.diagnostic_options),
             workspace_ready: Arc::clone(&self.workspace.ready),
             destructive_refactoring: Arc::clone(&self.workspace.destructive_refactoring),
+            startup_libraries: Arc::clone(&self.workspace.startup_libraries),
             diagnostic_publication: Arc::clone(&self.background_tasks.diagnostic_publication),
         }
     }

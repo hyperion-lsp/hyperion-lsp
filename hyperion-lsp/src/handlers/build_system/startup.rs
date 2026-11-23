@@ -71,14 +71,19 @@ impl BuildProgressCompletion {
 
 pub(crate) fn spawn_initial_build_refresh(
     publication: crate::server::diagnostics::InvalidationRuntime,
+    startup_library_hold: Option<crate::server::StartupLibraryHold>,
     inputs: BuildProgressInputs,
     build_refresh: BuildRefreshCoordinator,
 ) {
     let readiness = Arc::clone(&publication.destructive_refactoring);
     build_refresh.spawn_with(
         move || BuildReadinessCompletion::reserve(readiness),
-        move |refresh_ticket, build_readiness| {
-            run_initial_build_refresh(refresh_ticket, build_readiness, publication, inputs)
+        move |refresh_ticket, build_readiness| async move {
+            // Settles the initial dependency load for the diagnostic gate when
+            // this refresh ends: completed, failed, superseded or panicked. A
+            // superseding refresh joins the gate before this one is cancelled.
+            let _startup_library_hold = startup_library_hold;
+            run_initial_build_refresh(refresh_ticket, build_readiness, publication, inputs).await;
         },
     );
 }

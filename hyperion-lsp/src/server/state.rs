@@ -738,6 +738,10 @@ pub(super) struct WorkspaceAnalysis {
     /// `ready`, this includes the source manifest, JDK, and both build-system
     /// resolvers and remains false after any partial result.
     pub(super) destructive_refactoring: Arc<DestructiveRefactoringReadiness>,
+    /// Closed until the startup JDK and build-dependency loads have settled,
+    /// whatever their outcome; symbol-dependent diagnostics wait for it.
+    /// Unlike `ready`, it gates nothing but diagnostics.
+    pub(super) startup_libraries: Arc<super::StartupLibraryGate>,
     pub(super) diagnostic_options: Arc<RwLock<crate::diagnostic_engine::DiagnosticOptions>>,
     /// Disk-change reconciler shared by the file watcher and by client-sent
     /// file notifications (`didChangeWatchedFiles`, `didRenameFiles`, ...).

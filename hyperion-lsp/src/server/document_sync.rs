@@ -857,6 +857,7 @@ impl Backend {
         let host = Arc::clone(&self.workspace.host);
         let debouncer_arc = Arc::clone(&self.background_tasks.parsing);
         let workspace_ready = Arc::clone(&self.workspace.ready);
+        let startup_libraries = Arc::clone(&self.workspace.startup_libraries);
         let security_provider = Arc::clone(&self.services.security);
         let diagnostic_options = *self.workspace.diagnostic_options.read();
         let diagnostic_publication = Arc::clone(&self.background_tasks.diagnostic_publication);
@@ -887,6 +888,7 @@ impl Backend {
                     Some(&security_provider),
                     diagnostic_options,
                     Some(&workspace_ready),
+                    Some(&startup_libraries),
                     &diagnostic_publication,
                     generation,
                     host.index().current_workspace_revision(),

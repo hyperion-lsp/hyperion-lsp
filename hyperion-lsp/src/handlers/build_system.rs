@@ -188,9 +188,16 @@ pub(crate) fn schedule_build_system_refresh(
 ) {
     let reason = reason.to_string();
     let readiness = Arc::clone(&revision_publisher.destructive_refactoring);
+    // A refresh that supersedes the still-running startup refresh inherits
+    // its place in the diagnostic gate; it is taken before `spawn_with`
+    // cancels the older refresh, so the gate cannot open in between. After
+    // startup has settled this is `None`: later refreshes leave the semantic
+    // diagnostics on screen until their own revision republishes them.
+    let startup_library_hold = revision_publisher.startup_libraries.join_if_pending();
     coordinator.spawn_with(
         move || BuildReadinessCompletion::reserve(readiness),
         move |refresh_ticket, mut readiness| async move {
+            let _startup_library_hold = startup_library_hold;
             let work = async {
                 sleep(Duration::from_millis(500)).await;
                 debug!("Refreshing build system after {}", reason);

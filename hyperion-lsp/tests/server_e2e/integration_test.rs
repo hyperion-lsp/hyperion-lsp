@@ -1189,3 +1189,150 @@ fn library_sources_get_no_diagnostics() {
     );
     client.shutdown();
 }
+
+/// A file that uses `java.util` and has one real error.
+const STARTUP_GATE_SOURCE: &str = "package gate;\nimport java.util.*;\npublic class Gate {\n    public int f() {\n        List<String> names = new ArrayList<>();\n        Map<String, Integer> counts = new TreeMap<>();\n        return names.size() + counts.size() + missingSymbol;\n    }\n}\n";
+
+fn log_message_index(notifications: &[Value], matches: impl Fn(&str) -> bool) -> Option<usize> {
+    notifications.iter().position(|message| {
+        message.get("method").and_then(Value::as_str) == Some("window/logMessage")
+            && message
+                .pointer("/params/message")
+                .and_then(Value::as_str)
+                .is_some_and(&matches)
+    })
+}
+
+/// `(position in the notification stream, diagnostic messages)` of every
+/// publication for `uri`.
+fn publications_for(notifications: &[Value], uri: &str) -> Vec<(usize, Vec<String>)> {
+    notifications
+        .iter()
+        .enumerate()
+        .filter(|(_, message)| {
+            message.get("method").and_then(Value::as_str) == Some("textDocument/publishDiagnostics")
+                && message.pointer("/params/uri").and_then(Value::as_str) == Some(uri)
+        })
+        .map(|(index, message)| {
+            let messages = message
+                .pointer("/params/diagnostics")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|diagnostic| diagnostic.get("message")?.as_str().map(str::to_owned))
+                .collect();
+            (index, messages)
+        })
+        .collect()
+}
+
+/// Wait until `uri` gets its real `missingSymbol` error, then check that no
+/// publication ever reported a `java.util` type as missing and that the first
+/// semantic publication followed the settled startup loads named by
+/// `settled_after`.
+fn assert_semantic_diagnostics_wait_for_libraries(
+    client: &LSPTestClient,
+    uri: &str,
+    settled_after: &[&dyn Fn(&str) -> bool],
+) {
+    let deadline = Instant::now() + Duration::from_mins(2);
+    loop {
+        let notifications = client._notifications.lock().clone();
+        let has_real_error = publications_for(&notifications, uri)
+            .iter()
+            .any(|(_, messages)| messages.iter().any(|m| m.contains("missingSymbol")));
+        if has_real_error {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the real error never arrived: {:?}",
+            publications_for(&notifications, uri)
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+    // Let any later publication of the same analysis arrive too.
+    thread::sleep(Duration::from_millis(500));
+    let notifications = client._notifications.lock().clone();
+    let publications = publications_for(&notifications, uri);
+    for (_, messages) in &publications {
+        for library_type in ["List", "ArrayList", "Map", "TreeMap"] {
+            assert!(
+                !messages
+                    .iter()
+                    .any(|m| m.contains(&format!("cannot find symbol: {library_type}"))),
+                "a java.util type was reported missing before the JDK loaded: {publications:?}"
+            );
+        }
+    }
+    let first_semantic = publications
+        .iter()
+        .find(|(_, messages)| messages.iter().any(|m| m.contains("missingSymbol")))
+        .map(|(index, _)| *index)
+        .unwrap();
+    for settled in settled_after {
+        let settled_at = log_message_index(&notifications, settled)
+            .expect("a startup load never reported its outcome");
+        assert!(
+            settled_at < first_semantic,
+            "semantic diagnostics were published before a startup load settled: {publications:?}"
+        );
+    }
+}
+
+fn jdk_settled(message: &str) -> bool {
+    message.starts_with("✓ JDK stdlib indexed") || message.starts_with("⚠ JDK")
+}
+
+fn build_settled(message: &str) -> bool {
+    message.contains("Build system indexed:")
+}
+
+/// A file opened while the JDK and the build dependencies are still loading
+/// gets parse errors only; once both have settled it gets the full set, with
+/// no interim wall of "cannot find symbol: List".
+#[test]
+fn symbol_diagnostics_wait_for_the_startup_libraries() {
+    let workspace = TempDir::new().expect("temp workspace");
+    let path = workspace.path().join("Gate.java");
+    std::fs::write(&path, STARTUP_GATE_SOURCE).unwrap();
+    let uri = tower_lsp::lsp_types::Url::from_file_path(&path)
+        .unwrap()
+        .to_string();
+    let root_uri = tower_lsp::lsp_types::Url::from_directory_path(workspace.path())
+        .unwrap()
+        .to_string();
+
+    let client = LSPTestClient::new();
+    client.initialize(&root_uri);
+    // Deliberately not waiting for indexing: open at once, while the JDK loads.
+    client.did_open(&uri, "java", 1, STARTUP_GATE_SOURCE);
+    assert_semantic_diagnostics_wait_for_libraries(&client, &uri, &[&jdk_settled, &build_settled]);
+    client.shutdown();
+}
+
+/// Without a workspace root the workspace is ready at once, but the JDK still
+/// loads: the same gate applies, and semantic diagnostics still arrive.
+#[test]
+fn single_file_session_gets_symbol_diagnostics_after_the_jdk_settles() {
+    let directory = TempDir::new().expect("temp directory");
+    let path = directory.path().join("Gate.java");
+    std::fs::write(&path, STARTUP_GATE_SOURCE).unwrap();
+    let uri = tower_lsp::lsp_types::Url::from_file_path(&path)
+        .unwrap()
+        .to_string();
+
+    let client = LSPTestClient::new();
+    let id = client.send_request(
+        "initialize",
+        json!({ "processId": null, "rootUri": null, "capabilities": {} }),
+    );
+    let response = client
+        .wait_for_response(id, INTERACTIVE_RESPONSE_TIMEOUT_MS)
+        .expect("initialize timed out");
+    assert!(response.get("error").is_none(), "{response}");
+    client.send_notification("initialized", json!({}));
+    client.did_open(&uri, "java", 1, STARTUP_GATE_SOURCE);
+    assert_semantic_diagnostics_wait_for_libraries(&client, &uri, &[&jdk_settled]);
+    client.shutdown();
+}
