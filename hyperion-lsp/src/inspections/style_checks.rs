@@ -449,16 +449,12 @@ pub(crate) fn check_missing_override(syntax: &SyntaxNode, source_text: &str) -> 
                 let common_overrides = ["equals", "hashCode", "toString", "clone", "finalize"];
 
                 if common_overrides.contains(&method_name.as_str()) {
-                    let range = node.text_range();
-                    // Get just the method signature line
-                    let method_start = range.start();
-                    let lsp_range = text_range_to_lsp_range(
-                        TextRange::new(
-                            method_start,
-                            method_start + rowan::TextSize::from(method_name.len() as u32 + 20),
-                        ),
-                        source_text,
-                    );
+                    // Point at the method's name, not at the method: the
+                    // range of the node starts at its Javadoc and ends at
+                    // its closing brace.
+                    let name_range = method_name_token(&node)
+                        .map_or_else(|| node.text_range(), |token| token.text_range());
+                    let lsp_range = text_range_to_lsp_range(name_range, source_text);
 
                     diagnostics.push(Diagnostic {
                         range: lsp_range,
@@ -532,15 +528,30 @@ fn has_override_annotation(method_node: &SyntaxNode) -> bool {
 }
 
 /// Extract method name from method declaration
+fn method_name_token(method_node: &SyntaxNode) -> Option<hyperion_parser::SyntaxToken> {
+    method_node
+        .children_with_tokens()
+        .filter_map(rowan::NodeOrToken::into_token)
+        .find(|token| token.kind() == SyntaxKind::IDENT)
+}
+
 fn extract_method_name(method_node: &SyntaxNode) -> String {
-    for child in method_node.children_with_tokens() {
-        if child.kind() == SyntaxKind::IDENT {
-            if let Some(token) = child.as_token() {
-                return token.text().to_string();
-            }
+    method_name_token(method_node).map_or_else(String::new, |token| token.text().to_string())
+}
+
+/// The `catch (…)` header of a catch clause, without its block.
+fn catch_header_range(catch_clause: &SyntaxNode) -> TextRange {
+    let header: Vec<_> = catch_clause
+        .children_with_tokens()
+        .take_while(|element| element.kind() != SyntaxKind::BLOCK_STMT)
+        .filter(|element| !element.kind().is_trivia())
+        .collect();
+    match (header.first(), header.last()) {
+        (Some(first), Some(last)) => {
+            TextRange::new(first.text_range().start(), last.text_range().end())
         }
+        _ => catch_clause.text_range(),
     }
-    String::new()
 }
 
 /// Check for empty catch blocks
@@ -590,7 +601,7 @@ pub(crate) fn check_empty_catch_blocks(syntax: &SyntaxNode, source_text: &str) -
                 .last()
                 .is_some_and(|token| matches!(token.text(), "ignore" | "ignored" | "_"));
             if !has_statements && !has_comment && !parameter_ignored {
-                let range = node.text_range();
+                let range = catch_header_range(&node);
                 let lsp_range = text_range_to_lsp_range(range, source_text);
 
                 diagnostics.push(Diagnostic {

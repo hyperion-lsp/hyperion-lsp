@@ -12,6 +12,7 @@
 //! Uses hyperion-parser's AST to find security vulnerabilities.
 
 pub mod analysis_context;
+pub mod anchor;
 pub mod annotation_utils;
 pub mod cache;
 mod call_target;

@@ -122,6 +122,28 @@ impl<'a> CheckContext<'a> {
     }
 }
 
+/// The node's text without its string literals, text blocks and comments.
+///
+/// A check that looks for a call by its text (`Math.random()`) must look at
+/// code only: the same characters inside a string are data, for instance a
+/// JavaScript snippet in a text block.
+pub fn code_text(node: &SyntaxNode) -> String {
+    node.descendants_with_tokens()
+        .filter_map(rowan::NodeOrToken::into_token)
+        .filter(|token| {
+            !matches!(
+                token.kind(),
+                SyntaxKind::STRING_LITERAL
+                    | SyntaxKind::TEXT_BLOCK_LITERAL
+                    | SyntaxKind::LINE_COMMENT
+                    | SyntaxKind::BLOCK_COMMENT
+                    | SyntaxKind::DOC_COMMENT
+            )
+        })
+        .map(|token| token.text().to_string())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

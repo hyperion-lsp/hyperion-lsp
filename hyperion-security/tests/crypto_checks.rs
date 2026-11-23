@@ -605,3 +605,50 @@ public class KeyTest {
         .count();
     assert_eq!(key_size_findings, 0, "Should not flag a 256-bit EC key");
 }
+
+#[test]
+fn math_random_inside_a_string_is_not_a_call() {
+    // A JavaScript snippet served from a text block. The Java code makes no
+    // random number at all.
+    let source = r#"
+public class TrackingController {
+    public String token() {
+        String script = String.format("""
+                <script>
+                  var sessionId = Math.random().toString(36);
+                </script>
+                """, siteId);
+        return script;
+    }
+}
+"#;
+
+    let scanner = SecurityScanner::new(ScanConfig::default().with_min_severity(Severity::Info));
+    let findings = scanner.scan_source(source, Path::new("TrackingController.java"));
+    assert!(
+        findings
+            .iter()
+            .all(|finding| finding.vuln_type != VulnType::InsecureRandom),
+        "{findings:#?}"
+    );
+}
+
+#[test]
+fn math_random_in_code_is_still_reported() {
+    let source = r"
+public class Tokens {
+    public String token() {
+        return Long.toHexString((long) (Math.random() * Long.MAX_VALUE));
+    }
+}
+";
+
+    let scanner = SecurityScanner::new(ScanConfig::default().with_min_severity(Severity::Info));
+    let findings = scanner.scan_source(source, Path::new("Tokens.java"));
+    assert!(
+        findings
+            .iter()
+            .any(|finding| finding.vuln_type == VulnType::InsecureRandom),
+        "{findings:#?}"
+    );
+}

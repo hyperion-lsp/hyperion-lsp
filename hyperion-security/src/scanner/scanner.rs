@@ -203,6 +203,7 @@ impl SecurityScanner {
         let dead_code_ranges = collect_dead_code_ranges(&source_file, source);
         Self::adjust_findings_for_context(&mut findings, path, source, &dead_code_ranges);
         self.finalize_findings(&mut findings, source);
+        crate::anchor::anchor_findings(&root, source, &mut findings);
 
         if !findings.is_empty() {
             info!(
@@ -254,6 +255,7 @@ impl SecurityScanner {
         let dead_code_ranges = collect_dead_code_ranges(&source_file, source);
         Self::adjust_findings_for_context(&mut findings, path, source, &dead_code_ranges);
         self.finalize_findings(&mut findings, source);
+        crate::anchor::anchor_findings(root, source, &mut findings);
 
         if !findings.is_empty() {
             info!(

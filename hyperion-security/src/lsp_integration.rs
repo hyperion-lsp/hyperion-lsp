@@ -32,7 +32,7 @@ pub fn finding_to_diagnostic(
     source_text: &str,
     source_provider: SourceProvider<'_>,
 ) -> Diagnostic {
-    let range = location_to_range(&finding.source_location, source_text);
+    let range = location_to_range(finding.display_location(), source_text);
     let severity = severity_to_diagnostic_severity(finding.severity);
 
     // Create related information for data flow
@@ -561,7 +561,7 @@ pub fn finding_to_hover(finding: &Finding, source_text: &str) -> Hover {
 
     Hover {
         contents: HoverContents::Scalar(MarkedString::String(content)),
-        range: Some(location_to_range(&finding.source_location, source_text)),
+        range: Some(location_to_range(finding.display_location(), source_text)),
     }
 }
 

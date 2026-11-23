@@ -577,8 +577,12 @@ impl Check for InsecureRandomCheck {
             return vec![];
         }
 
+        // The calls are matched in code only. The security context below
+        // still reads the strings: a key or a message names what is made.
+        let code = super::code_text(node);
+
         // Check for new Random() or java.util.Random in security contexts
-        if node_text.contains("new Random()") || node_text.contains("new java.util.Random()") {
+        if code.contains("new Random()") || code.contains("new java.util.Random()") {
             // Check if this is in a security-sensitive context
             if Self::is_security_context(&node_text, node) {
                 return vec![Self::create_random_finding(node, context)];
@@ -586,7 +590,7 @@ impl Check for InsecureRandomCheck {
         }
 
         // Check for Math.random() in security contexts
-        if node_text.contains("Math.random()") && Self::is_security_context(&node_text, node) {
+        if code.contains("Math.random()") && Self::is_security_context(&node_text, node) {
             return vec![Self::create_math_random_finding(node, context)];
         }
 

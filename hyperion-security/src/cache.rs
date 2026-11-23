@@ -21,7 +21,7 @@ type FileHash = [u8; 32];
 /// Version of what the checks report. Bump it when a check changes its findings for the
 /// same source. A cache written under another version is discarded on load, so its
 /// findings are not replayed.
-pub const SCAN_CACHE_VERSION: u32 = 1;
+pub const SCAN_CACHE_VERSION: u32 = 2;
 
 /// Cache entry for a scanned file
 #[derive(Debug, Clone, Serialize, Deserialize)]

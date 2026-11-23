@@ -173,3 +173,65 @@ class Test {
         diagnostics.iter().map(|d| &d.message).collect::<Vec<_>>()
     );
 }
+
+/// The text a diagnostic's range covers.
+fn marked(source: &str, diagnostic: &tower_lsp::lsp_types::Diagnostic) -> String {
+    let offset = |position: tower_lsp::lsp_types::Position| {
+        let line_start: usize = source
+            .split_inclusive('\n')
+            .take(position.line as usize)
+            .map(str::len)
+            .sum();
+        line_start + position.character as usize
+    };
+    source[offset(diagnostic.range.start)..offset(diagnostic.range.end)].to_string()
+}
+
+// A lint about a method or a clause marks its name or its header. A range
+// over the whole node underlines every line of it in an editor.
+#[test]
+fn a_missing_override_warning_marks_the_method_name_only() {
+    let source = r"
+class Test {
+    /**
+     * Documented, so the method node starts three lines above its name.
+     */
+    public String toString() {
+        String a = first();
+        return a;
+    }
+    String first() { return null; }
+}
+";
+
+    let diagnostics = get_diagnostics(source);
+    let missing = diagnostics
+        .iter()
+        .find(|d| d.message.contains("lacks @Override"))
+        .expect("toString without @Override is reported");
+    assert_eq!(marked(source, missing), "toString");
+}
+
+#[test]
+fn an_empty_catch_warning_marks_the_catch_header_only() {
+    let source = r"
+class Test {
+    void foo() {
+        try {
+            riskyOp();
+        } catch (Exception e) {
+
+
+        }
+    }
+    void riskyOp() {}
+}
+";
+
+    let diagnostics = get_diagnostics(source);
+    let empty = diagnostics
+        .iter()
+        .find(|d| d.message.starts_with("Empty catch block"))
+        .expect("the empty catch block is reported");
+    assert_eq!(marked(source, empty), "catch (Exception e)");
+}

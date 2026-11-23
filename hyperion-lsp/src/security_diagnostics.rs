@@ -223,7 +223,7 @@ impl SecurityDiagnosticsProvider {
         // Find findings that overlap with the position
         let mut actions = Vec::new();
         for finding in findings.iter() {
-            if position_in_range(position, &finding.source_location, source_text) {
+            if position_in_range(position, finding.display_location(), source_text) {
                 let finding_actions = finding_to_code_actions(finding, uri, source_text);
                 actions.extend(finding_actions);
             }
@@ -259,7 +259,7 @@ impl SecurityDiagnosticsProvider {
 
         // Find the first finding that overlaps with the position
         for finding in findings.iter() {
-            if position_in_range(position, &finding.source_location, source_text) {
+            if position_in_range(position, finding.display_location(), source_text) {
                 debug!(
                     "Providing security hover for {} at {}:{}",
                     finding.vuln_type, position.line, position.character

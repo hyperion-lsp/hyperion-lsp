@@ -353,6 +353,11 @@ pub struct Finding {
     pub sanitizers: Vec<String>,
     pub message: String,
     pub source_location: Location,
+    /// The short range an editor should mark for this finding, when
+    /// `source_location` covers a whole declaration: the declaration's name.
+    /// See [`crate::anchor`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<Location>,
     pub sink_location: Option<Location>,
     pub code_snippet: String,
     pub dataflow: Vec<FlowStep>,
@@ -387,11 +392,19 @@ impl Finding {
             sanitizers: Vec::new(),
             message,
             source_location: location,
+            anchor: None,
             sink_location: None,
             code_snippet: code,
             dataflow: Vec::new(),
             remediation: Self::default_remediation(vuln_type),
         }
+    }
+
+    /// Where an editor should point for this finding: the anchor when the
+    /// finding covers a whole declaration, otherwise the finding's own range.
+    #[must_use]
+    pub fn display_location(&self) -> &Location {
+        self.anchor.as_ref().unwrap_or(&self.source_location)
     }
 
     fn default_remediation(vuln_type: VulnType) -> String {
