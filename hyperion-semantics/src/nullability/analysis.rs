@@ -2219,7 +2219,7 @@ fn transfer_terminator<R: VariableResolver>(
                 if flow.value.may_be_null() {
                     let mut null_exit = exit.clone();
                     if let Some(variable) = source {
-                        null_exit.set(variable, Nullability::Null);
+                        mark_null_on_npe_lane(&mut null_exit, variable, flow.value);
                     }
                     exceptional_exit.push(ExceptionalExit {
                         kind: ExceptionKind::NULL_POINTER,
@@ -2307,7 +2307,7 @@ fn transfer_terminator<R: VariableResolver>(
                 });
                 let mut null_env = env.clone();
                 if let Some((variable, _)) = resolve_variable_from_expr(&scrutinee.node, resolver) {
-                    null_env.set(variable, Nullability::Null);
+                    mark_null_on_npe_lane(&mut null_env, variable, flow.value);
                 }
                 exceptional_exit.push(ExceptionalExit {
                     kind: ExceptionKind::NULL_POINTER,
@@ -2520,7 +2520,7 @@ fn process_statement_observed<R: VariableResolver>(
             if value.may_be_null() {
                 let mut exceptional = env.clone();
                 if let Some(variable) = resolved {
-                    exceptional.set(variable, Nullability::Null);
+                    mark_null_on_npe_lane(&mut exceptional, variable, value);
                 }
                 flow.exceptional_exit.push(ExceptionalExit {
                     kind: ExceptionKind::NULL_POINTER,
@@ -2969,6 +2969,22 @@ impl ExceptionKind {
 struct ExceptionalExit {
     kind: ExceptionKind,
     env: NullabilityEnv,
+}
+
+/// Records, on the `NullPointerException` lane of a dereference, that
+/// `variable` was the null receiver.
+///
+/// `prior` is the receiver's nullability just before the dereference. Only a
+/// receiver already known to possibly be null (`Nullable` or `Null`) is
+/// marked `Null` on that lane. An `Unknown` receiver (an unannotated platform
+/// value) gives the analysis no evidence of nullness, so it stays as it was:
+/// the dereference must not manufacture evidence from its own NPE lane, or a
+/// later `catch (Exception e)` that joins this lane with the normal lanes
+/// would see `Nullable` for every dereferenced platform value.
+fn mark_null_on_npe_lane(env: &mut NullabilityEnv, variable: VariableId, prior: Nullability) {
+    if matches!(prior, Nullability::Nullable | Nullability::Null) {
+        env.set(variable, Nullability::Null);
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -3632,7 +3648,7 @@ fn require_unboxing<R: VariableResolver>(
     if flow.value.may_be_null() {
         let mut exceptional = normal_exit.clone();
         if let Some(variable) = resolved {
-            exceptional.set(variable, Nullability::Null);
+            mark_null_on_npe_lane(&mut exceptional, variable, flow.value);
         }
         flow.exceptional_exit.push(ExceptionalExit {
             kind: ExceptionKind::NULL_POINTER,
@@ -3699,7 +3715,7 @@ fn apply_primitive_cast_conversion<R: VariableResolver>(
     if flow.value.may_be_null() {
         let mut null_exit = normal_exit.clone();
         if let Some(variable) = resolved {
-            null_exit.set(variable, Nullability::Null);
+            mark_null_on_npe_lane(&mut null_exit, variable, flow.value);
         }
         flow.exceptional_exit.push(ExceptionalExit {
             kind: ExceptionKind::NULL_POINTER,
@@ -4627,7 +4643,7 @@ fn evaluate_assignment_expression<R: VariableResolver>(
         if delayed.value.may_be_null() {
             let mut exceptional = exit.clone();
             if let Some(variable) = stable_source {
-                exceptional.set(variable, Nullability::Null);
+                mark_null_on_npe_lane(&mut exceptional, variable, delayed.value);
             }
             exceptional_exit.push(ExceptionalExit {
                 kind: ExceptionKind::NULL_POINTER,
@@ -4856,7 +4872,7 @@ fn evaluate_method_call<R: VariableResolver>(
         if captured_value.may_be_null() {
             let mut exceptional = effective_env.clone();
             if let Some(variable) = stable_source {
-                exceptional.set(variable, Nullability::Null);
+                mark_null_on_npe_lane(&mut exceptional, variable, captured_value);
             }
             exceptional_exit.push(ExceptionalExit {
                 kind: ExceptionKind::NULL_POINTER,
@@ -5089,7 +5105,7 @@ fn evaluate_new_expression<R: VariableResolver>(
         if qualifier_value.may_be_null() {
             let mut exceptional = effective_env.clone();
             if let Some(variable) = resolved {
-                exceptional.set(variable, Nullability::Null);
+                mark_null_on_npe_lane(&mut exceptional, variable, qualifier_value);
             }
             exceptional_exit.push(ExceptionalExit {
                 kind: ExceptionKind::NULL_POINTER,
@@ -5344,7 +5360,7 @@ fn evaluate_field_access<R: VariableResolver>(
         if receiver_value.may_be_null() {
             let mut exceptional = exit.clone();
             if let Some(variable) = resolved {
-                exceptional.set(variable, Nullability::Null);
+                mark_null_on_npe_lane(&mut exceptional, variable, receiver_value);
             }
             exceptional_exit.push(ExceptionalExit {
                 kind: ExceptionKind::NULL_POINTER,
@@ -5479,7 +5495,7 @@ fn evaluate_array_access<R: VariableResolver>(
     if receiver_value.may_be_null() {
         let mut exceptional = effective_env.clone();
         if let Some(variable) = stable_source {
-            exceptional.set(variable, Nullability::Null);
+            mark_null_on_npe_lane(&mut exceptional, variable, receiver_value);
         }
         exceptional_exit.push(ExceptionalExit {
             kind: ExceptionKind::NULL_POINTER,
@@ -5557,7 +5573,7 @@ fn evaluate_method_reference<R: VariableResolver>(
     if receiver_value.may_be_null() {
         let mut exceptional = normal_exit.clone();
         if let Some(variable) = resolved {
-            exceptional.set(variable, Nullability::Null);
+            mark_null_on_npe_lane(&mut exceptional, variable, receiver_value);
         }
         exceptional_exit.push(ExceptionalExit {
             kind: ExceptionKind::NULL_POINTER,

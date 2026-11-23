@@ -1641,3 +1641,72 @@ fn test_ternary_arm_evaluated_under_condition_narrowing() {
         "`x != null ? x : dflt` is non-null; @Nonnull return should not warn, got: {diagnostics:?}"
     );
 }
+
+#[test]
+fn test_logging_in_catch_exception_publishes_no_warning_for_unknown_receiver() {
+    // `log.info(..)` in the try body has an NPE lane. It must not make the
+    // unannotated platform value `log` look null to `catch (Exception e)`.
+    let source = r#"
+        package a;
+        import java.util.logging.Logger;
+        public class A {
+            private static final Logger log = Logger.getLogger("a");
+            private final Runnable task = () -> {};
+            public String run(String input) {
+                try {
+                    log.info("start");
+                    task.run();
+                    return input.trim();
+                } catch (IllegalArgumentException e) {
+                    log.warning("bad argument");
+                    return "";
+                } catch (Exception e) {
+                    log.severe("failed");
+                    task.run();
+                    return "";
+                }
+            }
+        }
+    "#;
+
+    let lsp = get_default_lsp_diagnostics(source);
+    assert!(
+        lsp.is_empty(),
+        "an unknown-nullness logger must publish nothing at default settings, got: {lsp:?}"
+    );
+
+    let warnings: Vec<_> = get_lsp_diagnostics(source)
+        .into_iter()
+        .filter(|d| d.severity == Some(DiagnosticSeverity::WARNING))
+        .collect();
+    assert!(
+        warnings.is_empty(),
+        "no WARNING for an unknown-nullness receiver in a catch handler, got: {warnings:?}"
+    );
+}
+
+#[test]
+fn test_nullable_receiver_in_catch_exception_still_warns() {
+    let source = r#"
+        import javax.annotation.Nullable;
+        class Test {
+            void test(@Nullable Object value) {
+                try {
+                    value.toString();
+                } catch (Exception e) {
+                    value.hashCode();
+                }
+            }
+        }
+    "#;
+
+    let warnings: Vec<_> = get_default_lsp_diagnostics(source)
+        .into_iter()
+        .filter(|d| d.severity == Some(DiagnosticSeverity::WARNING))
+        .collect();
+    assert_eq!(
+        warnings.len(),
+        2,
+        "the try-body and handler dereferences of a @Nullable receiver both warn, got: {warnings:?}"
+    );
+}
